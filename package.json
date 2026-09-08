@@ -1,0 +1,14 @@
+{
+  "name": "ders-bul",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Ders Bul online ve yuz yuze ozel ders platformu",
+  "main": "backend/server.js",
+  "scripts": {
+    "start": "node backend/server.js",
+    "check": "node --check backend/server.js && node --check backend/db.js && node --check backend/router.js"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  }
+}

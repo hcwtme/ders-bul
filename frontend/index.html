@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Ders Bul</title>
+<link rel="stylesheet" href="/styles.css" />
+
+<!--
+  NOT: Bu proje build aracı (webpack/vite) kullanmıyor; React ve Babel doğrudan
+  CDN'den (kullanıcının kendi tarayıcısında) yükleniyor ve app.js içindeki JSX
+  tarayıcıda anlık derleniyor. Bu, geliştirme/MVP için pratiktir; gerçek
+  production ölçeğinde bir "npm run build" adımına geçmeniz önerilir
+  (README'de bu geçiş anlatılıyor).
+-->
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel" src="/app.js"></script>
+</body>
+</html>
