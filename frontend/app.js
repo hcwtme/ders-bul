@@ -65,20 +65,6 @@ function AuthScreen({ onLogin, initialMode = 'login' }) {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [busy, setBusy] = useState(false);
-  const [providers, setProviders] = useState({ google: false, apple: false });
-
-  useEffect(() => {
-    apiCall(null, 'GET', '/api/auth/providers').then(setProviders).catch(() => {});
-  }, []);
-
-  const startSocialLogin = async (provider) => {
-    setError('');
-    try {
-      await apiCall(null, 'GET', `/api/auth/oauth/${provider}`);
-    } catch (err) {
-      setError(err.message);
-    }
-  };
 
   const submit = async (e) => {
     e.preventDefault();
@@ -137,21 +123,6 @@ function AuthScreen({ onLogin, initialMode = 'login' }) {
             {busy ? 'Lütfen bekleyin...' : mode === 'forgot' ? 'Sıfırlama bağlantısı iste' : mode === 'login' ? 'Giriş Yap' : 'Hesap Oluştur'}
           </button>
         </form>
-
-        {mode === 'login' && (
-          <>
-            <div className="auth-divider"><span>veya</span></div>
-            <div className="social-actions">
-              <button className="social-btn google" type="button" disabled={!providers.google} onClick={() => startSocialLogin('google')}>
-                <span className="social-mark">G</span> Google ile devam et
-              </button>
-              <button className="social-btn apple" type="button" disabled={!providers.apple} onClick={() => startSocialLogin('apple')}>
-                <span className="social-mark">&#63743;</span> Apple ile devam et
-              </button>
-            </div>
-            {(!providers.google || !providers.apple) && <p className="social-note">Google ve Apple girişi, sunucu OAuth bilgileri eklendiğinde etkinleşir.</p>}
-          </>
-        )}
 
         <div className="switch-link">
           {mode === 'login' ? (

@@ -37,19 +37,6 @@ function logAdminAction(db, { actorUserId = null, action, targetType, targetId, 
 }
 
 function register(router, db) {
-  router.get('/api/auth/providers', (req, res) => {
-    res.json({
-      google: Boolean(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET),
-      apple: Boolean(process.env.APPLE_CLIENT_ID && process.env.APPLE_TEAM_ID && process.env.APPLE_KEY_ID && process.env.APPLE_PRIVATE_KEY),
-    });
-  });
-
-  router.get('/api/auth/oauth/:provider', (req, res) => {
-    const provider = String(req.params.provider || '').toLowerCase();
-    if (!['google', 'apple'].includes(provider)) return res.status(404).json({ error: 'Desteklenmeyen giriş sağlayıcısı.' });
-    return res.status(501).json({ error: `${provider === 'google' ? 'Google' : 'Apple'} girişi için OAuth bilgileri sunucuya eklenmeli.` });
-  });
-
   router.post('/api/auth/register', rateLimit({ windowMs: 60_000, max: 10, key: 'register' }), (req, res) => {
     const { email, password, fullName, role, payoutIban } = req.body || {};
 
