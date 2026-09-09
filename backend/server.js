@@ -11,16 +11,26 @@ const path = require('node:path');
 
 const { db } = require('./db');
 const { Router } = require('./router');
+const { register: registerUploads, serveUpload } = require('./uploads');
 
 const PORT = Number(process.env.PORT || 4000);
 const CORS_ORIGIN = process.env.CORS_ORIGIN || '';
 const FRONTEND_DIR = path.join(__dirname, '..', 'frontend');
+const ERROR_LOG = path.join(__dirname, 'data', 'errors.log');
+
+function logError(error, context = {}) {
+  const entry = JSON.stringify({ at: new Date().toISOString(), message: error?.message || String(error), stack: error?.stack, ...context });
+  fs.appendFileSync(ERROR_LOG, `${entry}\n`);
+  console.error(entry);
+}
 
 const router = new Router();
 require('./routes/auth').register(router, db);
 require('./routes/admin-users').register(router, db);
 require('./routes/teachers').register(router, db);
 require('./routes/platform').register(router, db);
+require('./routes/operations').register(router, db);
+registerUploads(router, db);
 
 router.get('/api/health', (req, res) => {
   res.json({ status: 'ok', service: 'ders-bul' });
@@ -103,6 +113,10 @@ const server = http.createServer(async (req, res) => {
   enhanceResponse(res);
 
   const url = new URL(req.url, `http://${req.headers.host}`);
+  if (url.pathname.startsWith('/uploads/')) {
+    if (serveUpload(req, res, url.pathname)) return;
+    return res.status(404).json({ error: 'Yüklenen dosya bulunamadı.' });
+  }
   if (!url.pathname.startsWith('/api/')) {
     if (serveStatic(req, res)) return;
     return res.status(404).json({ error: 'Bulunamadı.' });
@@ -113,11 +127,18 @@ const server = http.createServer(async (req, res) => {
       req.body = await readJsonBody(req);
     }
   } catch (e) {
+    logError(e, { method: req.method, url: req.url });
     return res.status(400).json({ error: e.message || 'Geçersiz istek gövdesi.' });
   }
 
-  router.handle(req, res);
+  router.handle(req, res).catch((error) => {
+    logError(error, { method: req.method, url: req.url });
+    if (!res.writableEnded) res.status(500).json({ error: 'Sunucu hatası.' });
+  });
 });
+
+process.on('uncaughtException', (error) => logError(error, { type: 'uncaughtException' }));
+process.on('unhandledRejection', (error) => logError(error, { type: 'unhandledRejection' }));
 
 server.listen(PORT, () => {
   console.log(`Ders Bul backend http://localhost:${PORT} adresinde çalışıyor.`);

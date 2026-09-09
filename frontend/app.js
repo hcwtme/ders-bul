@@ -59,9 +59,9 @@ function useCatalog() {
 }
 
 function AuthScreen({ onLogin, initialMode = 'login' }) {
-  const [mode, setMode] = useState(initialMode); // login | register
+  const [mode, setMode] = useState(initialMode); // login | register | forgot
   const [role, setRole] = useState('STUDENT');
-  const [form, setForm] = useState({ email: '', password: '', fullName: '' });
+  const [form, setForm] = useState({ email: '', password: '', fullName: '', payoutIban: '' });
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [busy, setBusy] = useState(false);
@@ -84,7 +84,10 @@ function AuthScreen({ onLogin, initialMode = 'login' }) {
     e.preventDefault();
     setError(''); setSuccess(''); setBusy(true);
     try {
-      if (mode === 'login') {
+      if (mode === 'forgot') {
+        const data = await apiCall(null, 'POST', '/api/auth/request-password-reset', { email: form.email });
+        setSuccess(data.message);
+      } else if (mode === 'login') {
         const data = await apiCall(null, 'POST', '/api/auth/login', { email: form.email, password: form.password });
         onLogin(data.token, data.user);
       } else {
@@ -118,20 +121,20 @@ function AuthScreen({ onLogin, initialMode = 'login' }) {
                 <button type="button" className={role === 'STUDENT' ? 'active' : ''} onClick={() => setRole('STUDENT')}>Öğrenciyim</button>
                 <button type="button" className={role === 'TEACHER' ? 'active' : ''} onClick={() => setRole('TEACHER')}>Öğretmenim</button>
               </div>
+              {role === 'TEACHER' && <><label>Ödeme IBAN'ı</label><input value={form.payoutIban} onChange={(e) => setForm({ ...form, payoutIban: e.target.value })} placeholder="TR ile başlayan 26 karakter" required /></>}
             </>
           )}
 
           <label>E-posta</label>
           <input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} required />
 
-          <label>Şifre</label>
-          <input type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} required minLength={8} />
+          {mode !== 'forgot' && <><label>Şifre</label><input type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} required minLength={8} /></>}
 
           {error && <div className="error-box">{error}</div>}
           {success && <div className="success-box">{success}</div>}
 
           <button className="btn" disabled={busy} type="submit">
-            {busy ? 'Lütfen bekleyin...' : mode === 'login' ? 'Giriş Yap' : 'Hesap Oluştur'}
+            {busy ? 'Lütfen bekleyin...' : mode === 'forgot' ? 'Sıfırlama bağlantısı iste' : mode === 'login' ? 'Giriş Yap' : 'Hesap Oluştur'}
           </button>
         </form>
 
@@ -152,7 +155,9 @@ function AuthScreen({ onLogin, initialMode = 'login' }) {
 
         <div className="switch-link">
           {mode === 'login' ? (
-            <>Hesabın yok mu? <a onClick={() => setMode('register')}>Kayıt ol</a></>
+            <><a onClick={() => setMode('forgot')}>Şifremi unuttum</a> · Hesabın yok mu? <a onClick={() => setMode('register')}>Kayıt ol</a></>
+          ) : mode === 'forgot' ? (
+            <>Giriş ekranına dönmek için <a onClick={() => setMode('login')}>buraya tıkla</a></>
           ) : (
             <>Zaten hesabın var mı? <a onClick={() => setMode('login')}>Giriş yap</a></>
           )}
@@ -163,15 +168,59 @@ function AuthScreen({ onLogin, initialMode = 'login' }) {
 }
 
 function Topbar({ user, onLogout }) {
+  const [theme, setTheme] = useState(() => localStorage.getItem('dersbul_theme') || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'));
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    localStorage.setItem('dersbul_theme', theme);
+  }, [theme]);
+
   return (
     <div className="topbar">
-      <div className="brand">Ders <span>Bul</span></div>
+      <div className="topbar-brand"><div className="brand">Ders <span>Bul</span></div><span className="topbar-caption">Özel ders merkezi</span></div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
         <span className="muted">{user.full_name} · <span className="badge">{roleLabel(user.role)}</span></span>
+        <button className="icon-btn" type="button" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')} title="Temayı değiştir" aria-label="Temayı değiştir">{theme === 'dark' ? '☀' : '☾'}</button>
         <button className="btn small secondary" onClick={onLogout}>Çıkış Yap</button>
       </div>
     </div>
   );
+}
+
+function statusLabel(status) {
+  return { pending: 'Bekliyor', awaiting_payment: 'Ödeme bekleniyor', accepted: 'Kabul edildi', rejected: 'Reddedildi', completed: 'Tamamlandı', cancelled: 'İptal edildi', open: 'Açık', resolved: 'Çözüldü', approved: 'Onaylandı' }[status] || status || 'Belirtilmemiş';
+}
+
+function DashboardShell({ user, token, onLogout }) {
+  const isAdmin = ['SUPER_ADMIN', 'ADMIN', 'ADMIN_HELPER'].includes(user.role);
+  const defaultSection = isAdmin ? 'overview' : user.role === 'TEACHER' ? 'schedule' : 'discover';
+  const [section, setSection] = useState(defaultSection);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const items = isAdmin
+    ? [['overview', 'Özet'], ['users', 'Kullanıcılar'], ['complaints', 'Şikayetler'], ['logs', 'İşlem kayıtları']]
+    : user.role === 'TEACHER'
+      ? [['schedule', 'Ders programım'], ['courses', 'İlanlarım'], ['applications', 'Başvurular'], ['messages', 'Mesajlar'], ['profile', 'Profil']]
+      : [['discover', 'Ders keşfet'], ['applications', 'Başvurularım'], ['messages', 'Mesajlar'], ['complaints', 'Destek']];
+
+  const selectSection = (next) => { setSection(next); setMenuOpen(false); };
+  const content = isAdmin
+    ? <AdminDashboard key={section} token={token} user={user} initialTab={section} />
+    : user.role === 'TEACHER'
+      ? <TeacherDashboard user={user} token={token} section={section} />
+      : <StudentDashboard user={user} token={token} section={section} />;
+
+  return <>
+    <Topbar user={user} onLogout={onLogout} />
+    <button className="mobile-menu-btn" type="button" onClick={() => setMenuOpen(!menuOpen)} aria-expanded={menuOpen}>☰ Menü</button>
+    <div className={`dashboard-layout ${menuOpen ? 'menu-open' : ''}`}>
+      <aside className="side-nav">
+        <div className="side-nav-user"><strong>{user.full_name}</strong><span>{roleLabel(user.role)}</span></div>
+        <nav aria-label="Ana menü">{items.map(([key, label]) => <button key={key} className={section === key ? 'active' : ''} type="button" onClick={() => selectSection(key)}>{label}</button>)}</nav>
+        <button className="side-logout" type="button" onClick={onLogout}>Çıkış yap</button>
+      </aside>
+      <main className="dashboard-main">{content}</main>
+    </div>
+  </>;
 }
 
 function roleLabel(role) {
@@ -195,10 +244,44 @@ function TeacherProfileForm({ token, user }) {
     hourlyPrice: 0,
     city: '',
     photoUrl: '',
+    payoutIban: '',
   });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
+  const [uploading, setUploading] = useState(false);
+
+  const handleImageUpload = async (event) => {
+    const file = event.target.files && event.target.files[0];
+    if (!file) return;
+
+    const allowedTypes = ['image/png', 'image/jpeg', 'image/webp'];
+    if (!allowedTypes.includes(file.type)) {
+      setMessage('Sadece PNG, JPG veya WEBP fotoğraflar yüklenebilir.');
+      return;
+    }
+
+    setUploading(true);
+    setMessage('');
+    try {
+      const reader = new FileReader();
+      reader.onload = async () => {
+        const base64 = String(reader.result || '').split(',')[1] || '';
+        const data = await apiCall(token, 'POST', '/api/uploads/image', { mimeType: file.type, dataBase64: base64 });
+        setForm((current) => ({ ...current, photoUrl: data.url }));
+        setMessage('Fotoğraf yüklendi. Kaydet butonuna basarak profilini güncelle.');
+        setUploading(false);
+      };
+      reader.onerror = () => {
+        setMessage('Fotoğraf okunamadı.');
+        setUploading(false);
+      };
+      reader.readAsDataURL(file);
+    } catch (err) {
+      setMessage(err.message);
+      setUploading(false);
+    }
+  };
 
   useEffect(() => {
     async function load() {
@@ -215,6 +298,7 @@ function TeacherProfileForm({ token, user }) {
           hourlyPrice: profile.hourly_price || 0,
           city: profile.city || '',
           photoUrl: profile.photo_url || '',
+          payoutIban: profile.payout_iban || '',
         });
       } catch (e) {
         setMessage(e.message);
@@ -267,8 +351,16 @@ function TeacherProfileForm({ token, user }) {
         <label>Fiyat (TL / saat)</label>
         <input type="number" min="0" value={form.hourlyPrice} onChange={(e) => setForm({ ...form, hourlyPrice: e.target.value })} />
 
+        <label>Profil fotoğrafı</label>
+        <input type="file" accept="image/png,image/jpeg,image/webp" onChange={handleImageUpload} />
+        {form.photoUrl && <div className="profile-thumb-wrap"><img className="profile-thumb" src={form.photoUrl} alt="Profil fotoğrafı" /></div>}
         <label>Fotoğraf URL</label>
-        <input value={form.photoUrl} onChange={(e) => setForm({ ...form, photoUrl: e.target.value })} />
+        <input value={form.photoUrl} onChange={(e) => setForm({ ...form, photoUrl: e.target.value })} placeholder="/uploads/xxx.png veya https://..." />
+
+        <label>Öğretmen ödeme IBAN'ı</label>
+        <input value={form.payoutIban} onChange={(e) => setForm({ ...form, payoutIban: e.target.value })} placeholder="TR ile başlayan 26 karakter" />
+
+        {uploading && <p className="muted">Fotoğraf yükleniyor...</p>}
 
         <label>Verilebilen ders türleri</label>
         <div className="checkbox-row">
@@ -451,7 +543,7 @@ function TeacherCoursesList({ token }) {
   );
 }
 
-function TeacherDashboard({ user, token }) {
+function TeacherDashboard({ user, token, section = 'schedule' }) {
   const [refreshKey, setRefreshKey] = useState(0);
 
   return (
@@ -463,11 +555,11 @@ function TeacherDashboard({ user, token }) {
         </p>
       </div>
 
-      <TeacherScheduleBuilder token={token} userId={user.id} />
-      <TeacherProfileForm token={token} user={user} />
-      <CourseForm token={token} onCreated={() => setRefreshKey((k) => k + 1)} />
-      <TeacherApplicationsList token={token} />
-      <TeacherCoursesList key={refreshKey} token={token} />
+      {section === 'schedule' && <TeacherScheduleBuilder token={token} userId={user.id} />}
+      {section === 'profile' && <TeacherProfileForm token={token} user={user} />}
+      {section === 'courses' && <><CourseForm token={token} onCreated={() => setRefreshKey((k) => k + 1)} /><TeacherCoursesList key={refreshKey} token={token} /></>}
+      {section === 'applications' && <TeacherApplicationsList token={token} />}
+      {section === 'messages' && <MessagesPanel token={token} user={user} />}
     </div>
   );
 }
@@ -500,6 +592,13 @@ function TeacherApplicationsList({ token }) {
     }
   };
 
+  const complete = async (id) => {
+    try {
+      await apiCall(token, 'PATCH', `/api/platform/applications/${id}/lifecycle`, { action: 'complete' });
+      await load();
+    } catch (err) { setError(err.message); }
+  };
+
   if (loading) return <div className="card"><p className="muted">Başvurular yükleniyor...</p></div>;
 
   return (
@@ -512,12 +611,13 @@ function TeacherApplicationsList({ token }) {
             <div className="list-item" key={application.id}>
               <div>
                 <strong>{application.course_title}</strong>
-                <div className="muted">Öğrenci: {application.student_name} · {application.status}</div>
+                <div className="muted">Öğrenci: {application.student_name} · <span className="badge">{statusLabel(application.status)}</span></div>
                 {application.note && <p>{application.note}</p>}
               </div>
               <div className="row-actions">
                 <button className="btn small" type="button" onClick={() => setStatus(application.id, 'accepted')}>Kabul Et</button>
                 <button className="btn small danger" type="button" onClick={() => setStatus(application.id, 'rejected')}>Reddet</button>
+                {application.status === 'accepted' && <button className="btn small secondary" type="button" onClick={() => complete(application.id)}>Tamamlandı</button>}
               </div>
             </div>
           ))}
@@ -527,7 +627,65 @@ function TeacherApplicationsList({ token }) {
   );
 }
 
-function StudentDashboard({ user, token }) {
+function timeOptions(value) {
+  if (!value) return [];
+  return String(value).split(',').flatMap((range) => {
+    const [start, end] = range.trim().split('-');
+    return start && end ? [`${start} - ${end}`] : [range.trim()];
+  }).filter(Boolean);
+}
+
+function ApplicationStatusList({ applications, token, onChanged }) {
+  if (!applications.length) return <div className="card empty-state"><h3>Henüz başvuru yok</h3><p className="muted">Bir ilan seçtiğinde başvuruların burada görünecek.</p></div>;
+  const cancel = async (id) => { try { await apiCall(token, 'PATCH', `/api/platform/applications/${id}/lifecycle`, { action: 'cancel', reason: 'Öğrenci tarafından iptal edildi.' }); onChanged(); } catch (err) { window.alert(err.message); } };
+  return <div className="stack-list">{applications.map((application) => <div className="list-item" key={application.id}><div><strong>{application.course_title}</strong><div className="muted">{application.teacher_name || 'Öğretmen'} · <span className="badge">{statusLabel(application.status)}</span></div>{application.note && <p>{application.note}</p>}</div>{!['completed', 'cancelled', 'rejected'].includes(application.status) && <button className="btn small danger" type="button" onClick={() => cancel(application.id)}>İptal et</button>}</div>)}</div>;
+}
+
+function MessagesPanel({ token, user, applications }) {
+  const [messages, setMessages] = useState([]);
+  const [contacts, setContacts] = useState([]);
+  const [receiverId, setReceiverId] = useState('');
+  const [text, setText] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(async () => {
+    try {
+      const [messageData, applicationData] = await Promise.all([
+        apiCall(token, 'GET', '/api/platform/messages'),
+        applications && applications.length ? Promise.resolve({ applications }) : apiCall(token, 'GET', '/api/platform/applications'),
+      ]);
+      setMessages(messageData.messages || []);
+      const rows = applicationData.applications || [];
+      setContacts(rows.map((item) => ({ id: user.role === 'TEACHER' ? item.student_id : item.teacher_id, name: user.role === 'TEACHER' ? item.student_name : item.teacher_name })).filter((item, index, list) => item.id && list.findIndex((other) => other.id === item.id) === index));
+    } catch (err) { setError(err.message); }
+  }, [token, user.role, applications]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const send = async (event) => {
+    event.preventDefault();
+    if (!receiverId || !text.trim()) return;
+    setBusy(true); setError('');
+    try { await apiCall(token, 'POST', '/api/platform/messages', { receiverId: Number(receiverId), text }); setText(''); await load(); }
+    catch (err) { setError(err.message); } finally { setBusy(false); }
+  };
+
+  return <div className="card messages-panel"><div className="section-row"><div><h2>Mesajlar</h2><p className="muted">Başvuru yaptığın veya başvuran kişilerle konuş.</p></div><button className="btn small secondary" type="button" onClick={load}>Yenile</button></div>{error && <div className="error-box">{error}</div>}<select value={receiverId} onChange={(e) => setReceiverId(e.target.value)}><option value="">Kişi seç</option>{contacts.map((contact) => <option value={contact.id} key={contact.id}>{contact.name}</option>)}</select><div className="message-list">{messages.length ? messages.map((message) => <div className={`message-bubble ${message.sender_id === user.id ? 'mine' : ''}`} key={message.id}><strong>{message.sender_name}</strong><p>{message.text}</p><small>{new Date(message.created_at).toLocaleString('tr-TR')}</small></div>) : <p className="muted">Henüz mesaj yok.</p>}</div><form className="message-compose" onSubmit={send}><textarea value={text} onChange={(e) => setText(e.target.value)} maxLength={2000} placeholder="Mesajını yaz..." required /><button className="btn" disabled={busy || !receiverId}>{busy ? 'Gönderiliyor...' : 'Gönder'}</button></form></div>;
+}
+
+function UserComplaintPanel({ token }) {
+  const [reason, setReason] = useState('');
+  const [detail, setDetail] = useState('');
+  const [items, setItems] = useState([]);
+  const [message, setMessage] = useState('');
+  const load = useCallback(() => apiCall(token, 'GET', '/api/platform/complaints').then((data) => setItems(data.complaints || [])).catch((err) => setMessage(err.message)), [token]);
+  useEffect(() => { load(); }, [load]);
+  const submit = async (event) => { event.preventDefault(); setMessage(''); try { await apiCall(token, 'POST', '/api/platform/complaints', { reason, detail }); setReason(''); setDetail(''); setMessage('Bildirim destek ekibine gönderildi.'); await load(); } catch (err) { setMessage(err.message); } };
+  return <div className="card"><h2>Destek ve şikayet</h2><form onSubmit={submit}><label>Konu</label><input value={reason} onChange={(e) => setReason(e.target.value)} maxLength={120} required placeholder="Örn. Uygunsuz ilan" /><label>Detay</label><textarea value={detail} onChange={(e) => setDetail(e.target.value)} maxLength={2000} rows="4" placeholder="Sorunu kısaca anlat" /><button className="btn" type="submit">Gönder</button></form>{message && <div className="success-box">{message}</div>}<div className="stack-list support-history">{items.map((item) => <div className="list-item" key={item.id}><strong>{item.reason}</strong><span className="badge">{statusLabel(item.status)}</span></div>)}</div></div>;
+}
+
+function StudentDashboard({ user, token, section = 'discover' }) {
   const { subjects, gradeLevels } = useCatalog();
   const [filters, setFilters] = useState({ q: '', subject: '', grade: '', mode: '', maxPrice: '' });
   const [courses, setCourses] = useState([]);
@@ -535,6 +693,7 @@ function StudentDashboard({ user, token }) {
   const [applications, setApplications] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [selectedSlots, setSelectedSlots] = useState({});
 
   const loadCourses = useCallback(async () => {
     setLoading(true); setError('');
@@ -588,12 +747,18 @@ function StudentDashboard({ user, token }) {
   const applyCourse = async (courseId) => {
     if (!token) return;
     try {
-      await apiCall(token, 'POST', '/api/platform/applications', { courseId });
+      const course = courses.find((item) => item.id === courseId);
+      const data = await apiCall(token, 'POST', '/api/platform/applications', { courseId, selectedDay: course?.availability_days, selectedSlot: selectedSlots[courseId], note: `Tercih edilen saat: ${selectedSlots[courseId]}` });
+      window.alert(`Ödenecek tutar: ${data.payment.amount} TL\nIBAN: ${data.payment.iban}\nAçıklama: ${data.payment.instruction}\nKullanılacak referans: ${data.payment.reference}`);
       await loadApplications();
     } catch (err) {
       setError(err.message);
     }
   };
+
+  if (section === 'applications') return <div className="container"><div className="section-row"><h2>Başvurularım</h2></div><ApplicationStatusList applications={applications} token={token} onChanged={loadApplications} /></div>;
+  if (section === 'messages') return <div className="container"><MessagesPanel token={token} user={user} applications={applications} /></div>;
+  if (section === 'complaints') return <div className="container"><UserComplaintPanel token={token} /></div>;
 
   return (
     <div className="container">
@@ -647,6 +812,7 @@ function StudentDashboard({ user, token }) {
             <p>{course.description}</p>
             <div className="course-meta"><span>Öğretmen: {course.teacher_name}</span><span>{course.mode === 'online' ? 'Online' : 'Yüz yüze'}</span></div>
             <div className="course-meta"><span>Sınıflar: {course.grade_levels || 'Belirtilmemiş'}</span><span>{course.availability_days || 'Gün belirtilmemiş'}</span></div>
+            <div className="course-time-picker"><strong>Uygun saat</strong><select value={selectedSlots[course.id] || ''} onChange={(e) => setSelectedSlots({ ...selectedSlots, [course.id]: e.target.value })}><option value="">Saati seç</option>{timeOptions(course.availability_hours).map((slot) => <option key={slot} value={slot}>{slot}</option>)}</select></div>
             <div className="row-actions" style={{ marginTop: 14 }}>
               <button className="btn small secondary" type="button" onClick={() => toggleFavorite(course.id)}>
                 {isFavorite(course.id) ? 'Favoriden Çıkar' : 'Favorilere Ekle'}
@@ -667,7 +833,8 @@ function StudentDashboard({ user, token }) {
               <div className="list-item" key={application.id}>
                 <div>
                   <strong>{application.course_title}</strong>
-                  <div className="muted">Durum: {application.status}</div>
+                    <div className="muted">Saat: {application.selected_slot || '—'} · Durum: <span className="badge">{statusLabel(application.status)}</span>{application.note && ` · ${application.note}`}</div>
+                    {application.payment_status === 'awaiting_transfer' && application.admin_receive_iban && <p className="payment-instruction">Ödeme: {application.price} TL · IBAN: {application.admin_receive_iban}<br />Açıklama: {application.payment_instruction || 'DERS başvuru numaranızı yazın.'}<br />Referans: DERS-{application.id}</p>}
                 </div>
               </div>
             ))}
@@ -682,8 +849,8 @@ function StudentOrTeacherDashboard({ user, token }) {
   return user.role === 'TEACHER' ? <TeacherDashboard user={user} token={token} /> : <StudentDashboard user={user} token={token} />;
 }
 
-function AdminDashboard({ token, user }) {
-  const [tab, setTab] = useState('overview');
+function AdminDashboard({ token, user, initialTab = 'overview' }) {
+  const [tab, setTab] = useState(initialTab);
   return (
     <div className="container">
       <AdminOverview token={token} onNavigate={setTab} />
@@ -698,6 +865,7 @@ function AdminDashboard({ token, user }) {
         )}
         <button className={tab === 'logs' ? 'active' : ''} onClick={() => setTab('logs')}>Admin Logları</button>
         <button className={tab === 'complaints' ? 'active' : ''} onClick={() => setTab('complaints')}>Şikayetler</button>
+        <button className={tab === 'payments' ? 'active' : ''} onClick={() => setTab('payments')}>Ödemeler</button>
       </div>
       {tab === 'overview' && <div className="card admin-help"><h2>Bugün ne yapmak istersin?</h2><p className="muted">Onay bekleyen öğretmenleri kontrol et, sonra kullanıcıları ve ilanları gözden geçir.</p></div>}
       {tab === 'users' && <UsersTable token={token} currentUser={user} />}
@@ -705,8 +873,58 @@ function AdminDashboard({ token, user }) {
       {tab === 'permissions' && <PermissionsPanel token={token} />}
       {tab === 'logs' && <LogsPanel token={token} />}
       {tab === 'complaints' && <ComplaintsPanel token={token} />}
+      {tab === 'payments' && <AdminPaymentsPanel token={token} />}
     </div>
   );
+}
+
+function AdminPaymentsPanel({ token }) {
+  const [iban, setIban] = useState('');
+  const [instruction, setInstruction] = useState('Açıklama kısmına ders başvuru numaranızı yazın.');
+  const [payments, setPayments] = useState([]);
+  const [teachers, setTeachers] = useState([]);
+  const [rates, setRates] = useState({});
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+  const load = useCallback(async () => {
+    try {
+      const [settings, data, teacherData] = await Promise.all([
+        apiCall(token, 'GET', '/api/admin/payment-settings'),
+        apiCall(token, 'GET', '/api/admin/payments'),
+        apiCall(token, 'GET', '/api/admin/teacher-commissions'),
+      ]);
+      setIban(settings.adminReceiveIban || '');
+      setInstruction(settings.paymentInstruction || 'Açıklama kısmına ders başvuru numaranızı yazın.');
+      setPayments(data.payments || []);
+      setTeachers(teacherData.teachers || []);
+      setRates(Object.fromEntries((teacherData.teachers || []).map((teacher) => [teacher.teacher_id, teacher.commission_rate])));
+    } catch (err) { setError(err.message); }
+  }, [token]);
+  useEffect(() => { load(); }, [load]);
+  const saveIban = async (event) => {
+    event.preventDefault(); setError(''); setMessage('');
+    try { await apiCall(token, 'PUT', '/api/admin/payment-settings', { adminReceiveIban: iban, paymentInstruction: instruction }); setMessage('IBAN ve ödeme açıklaması kaydedildi.'); }
+    catch (err) { setError(err.message); }
+  };
+  const action = async (id, endpoint, body) => {
+    try { await apiCall(token, 'PATCH', `/api/admin/payments/${id}/${endpoint}`, body); await load(); }
+    catch (err) { setError(err.message); }
+  };
+  const saveRate = async (teacherId) => {
+    try { await apiCall(token, 'PATCH', `/api/admin/teacher-commissions/${teacherId}`, { commissionRate: Number(rates[teacherId]) }); await load(); }
+    catch (err) { setError(err.message); }
+  };
+  const exportCsv = () => {
+    const headers = ['Başvuru', 'Ders', 'Öğrenci', 'Öğretmen', 'Toplam', 'Komisyon %', 'Komisyon', 'Öğretmen Payı', 'Durum'];
+    const rows = payments.map((item) => [item.id, item.course_title, item.student_name, item.teacher_name, (item.amount_cents / 100).toFixed(2), item.commission_rate || '', ((item.commission_cents || 0) / 100).toFixed(2), ((item.teacher_payout_cents || 0) / 100).toFixed(2), item.payment_status]);
+    const csv = [headers, ...rows].map((row) => row.map((value) => `"${String(value).replaceAll('"', '""')}"`).join(';')).join('\n');
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(new Blob([`\ufeff${csv}`], { type: 'text/csv;charset=utf-8' }));
+    link.download = `dersbul-komisyonlar-${new Date().toISOString().slice(0, 10)}.csv`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+  };
+  return <div className="card"><div className="section-row"><div><h2>Komisyon ve ödemeler</h2><p className="muted">Excel görünümünde takip et. Varsayılan öğretmen komisyonu %15'tir.</p></div><button className="btn small secondary" type="button" onClick={exportCsv}>Excel olarak indir</button></div><form onSubmit={saveIban}><label>Öğrencilerin ödeme yapacağı admin IBAN</label><input value={iban} onChange={(e) => setIban(e.target.value)} placeholder="TR ile başlayan 26 karakter" required /><label>Öğrenciye gösterilecek ödeme açıklaması</label><textarea value={instruction} onChange={(e) => setInstruction(e.target.value)} maxLength={500} rows="3" required /><p className="muted">Her işlem için öğrenciye ayrıca otomatik referans numarası gösterilir.</p><button className="btn small" type="submit">Ödeme ayarlarını kaydet</button></form>{message && <div className="success-box">{message}</div>}{error && <div className="error-box">{error}</div>}<h3 className="payment-section-title">Öğretmen komisyon oranları</h3><div className="table-scroll"><table><thead><tr><th>Öğretmen</th><th>Komisyon %</th><th>İşlem</th></tr></thead><tbody>{teachers.map((teacher) => <tr key={teacher.teacher_id}><td>{teacher.full_name}<div className="muted">{teacher.email}</div></td><td><input className="rate-input" type="number" min="0" max="100" step="0.01" value={rates[teacher.teacher_id] ?? 15} onChange={(event) => setRates({ ...rates, [teacher.teacher_id]: event.target.value })} /></td><td><button className="btn small secondary" type="button" onClick={() => saveRate(teacher.teacher_id)}>Kaydet</button></td></tr>)}</tbody></table></div><h3 className="payment-section-title">Ödeme kayıtları</h3><div className="table-scroll"><table><thead><tr><th>Başvuru / Ders</th><th>Taraflar</th><th>Toplam</th><th>Komisyon</th><th>Öğretmen Payı</th><th>Durum</th><th>İşlem</th></tr></thead><tbody>{payments.map((item) => <tr key={item.id}><td><strong>DERS-{item.id}</strong><div>{item.course_title}</div><small>{item.selected_slot || 'Saat yok'}</small></td><td>{item.student_name}<br />→ {item.teacher_name}</td><td>{(item.amount_cents / 100).toFixed(2)} TL</td><td>{item.commission_cents ? `${(item.commission_cents / 100).toFixed(2)} TL (%${item.commission_rate})` : 'Onay bekliyor'}</td><td>{item.teacher_payout_cents ? `${(item.teacher_payout_cents / 100).toFixed(2)} TL` : 'Onay bekliyor'}</td><td>{item.payment_status}<br />{statusLabel(item.status)}</td><td><div className="row-actions">{item.payment_status !== 'confirmed' && <button className="btn small" type="button" onClick={() => action(item.id, 'confirm', { commissionRate: Number(rates[item.teacher_id] ?? 15) })}>Para geldi</button>}{item.status === 'accepted' && item.payment_status !== 'payout_sent' && <button className="btn small secondary" type="button" onClick={() => action(item.id, 'payout-sent')}>Payı gönderdim</button>}</div></td></tr>)}</tbody></table></div></div>;
 }
 
 function AdminOverview({ token, onNavigate }) {
@@ -784,7 +1002,7 @@ function UsersTable({ token, currentUser }) {
               <td>
                 {!u.is_active && <span className="badge blocked">Pasif</span>}{' '}
                 {!!u.is_blocked && <span className="badge blocked">Engelli</span>}{' '}
-                {u.role === 'TEACHER' && <span className={`badge ${u.teacher_status}`}>{u.teacher_status}</span>}
+                {u.role === 'TEACHER' && <span className={`badge ${u.teacher_status}`}>{statusLabel(u.teacher_status)}</span>}
                 {u.is_active && !u.is_blocked && u.role !== 'TEACHER' && <span className="badge approved">Aktif</span>}
               </td>
               <td>
@@ -946,12 +1164,14 @@ function LogsPanel({ token }) {
 function ComplaintsPanel({ token }) {
   const [complaints, setComplaints] = useState([]);
   const [error, setError] = useState('');
+  const load = useCallback(() => apiCall(token, 'GET', '/api/platform/complaints').then((data) => setComplaints(data.complaints || [])).catch((err) => setError(err.message)), [token]);
 
-  useEffect(() => {
-    apiCall(token, 'GET', '/api/platform/complaints')
-      .then((data) => setComplaints(data.complaints || []))
-      .catch((err) => setError(err.message));
-  }, [token]);
+  useEffect(() => { load(); }, [load]);
+
+  const updateStatus = async (id, status) => {
+    try { await apiCall(token, 'PATCH', `/api/platform/complaints/${id}/status`, { status }); await load(); }
+    catch (err) { setError(err.message); }
+  };
 
   return (
     <div className="card">
@@ -963,9 +1183,10 @@ function ComplaintsPanel({ token }) {
             <div className="list-item" key={item.id}>
               <div>
                 <strong>{item.reason}</strong>
-                <div className="muted">{item.user_name || item.email || 'Kullanıcı'} · {item.status}</div>
+                <div className="muted">{item.user_name || item.email || 'Kullanıcı'} · <span className="badge">{statusLabel(item.status)}</span></div>
                 {item.detail && <p>{item.detail}</p>}
               </div>
+              <button className="btn small secondary" type="button" onClick={() => updateStatus(item.id, item.status === 'open' ? 'resolved' : 'open')}>{item.status === 'open' ? 'Çözüldü' : 'Yeniden aç'}</button>
             </div>
           ))}
         </div>
@@ -1110,7 +1331,7 @@ function TeacherScheduleBuilder({ token, userId }) {
     }
   });
 
-  const [draft, setDraft] = useState({ day: 'Pazartesi', start: '09:00', duration: 40, color: '#3b82f6' });
+  const [draft, setDraft] = useState({ title: '', day: 'Pazartesi', start: '09:00', duration: 40, color: '#3b82f6' });
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState('');
 
@@ -1125,6 +1346,7 @@ function TeacherScheduleBuilder({ token, userId }) {
           start: block.start_time,
           duration: Number(block.duration_min || 60),
           color: block.color || '#3b82f6',
+          title: block.title || 'Ders',
         }));
         setBlocks(nextBlocks);
         localStorage.setItem(`dersbul_schedule_${userId}`, JSON.stringify(nextBlocks));
@@ -1172,6 +1394,7 @@ function TeacherScheduleBuilder({ token, userId }) {
       start: draft.start,
       duration,
       color: draft.color || '#3b82f6',
+      title: draft.title.trim() || 'Ders',
     };
 
     if (token) {
@@ -1181,6 +1404,7 @@ function TeacherScheduleBuilder({ token, userId }) {
           start: clean.start,
           duration: clean.duration,
           color: clean.color,
+          title: clean.title,
         });
         if (data.block) {
           clean.id = data.block.id;
@@ -1231,6 +1455,9 @@ function TeacherScheduleBuilder({ token, userId }) {
 
       <div className="schedule-builder">
         <div className="schedule-form">
+          <label>Ders adı</label>
+          <input value={draft.title} onChange={(e) => setDraft({ ...draft, title: e.target.value })} placeholder="Örn. Matematik" maxLength="120" />
+
           <label>Gün</label>
           <select value={draft.day} onChange={(e) => setDraft({ ...draft, day: e.target.value })}>
             {days.map((day) => <option key={day} value={day}>{day}</option>)}
@@ -1285,7 +1512,7 @@ function TeacherScheduleBuilder({ token, userId }) {
                         background: block.color,
                       }}
                     >
-                      <span>{day}</span>
+                      <span>{block.title || day}</span>
                       <strong>{block.start}</strong>
                       <small>{block.duration} dk</small>
                     </button>
@@ -1308,12 +1535,7 @@ function App() {
 
   const isAdminLike = ['SUPER_ADMIN', 'ADMIN', 'ADMIN_HELPER'].includes(user.role);
 
-  return (
-    <>
-      <Topbar user={user} onLogout={logout} />
-      {isAdminLike ? <AdminDashboard token={token} user={user} /> : <StudentOrTeacherDashboard user={user} token={token} />}
-    </>
-  );
+  return <DashboardShell user={user} token={token} onLogout={logout} />;
 }
 
 ReactDOM.createRoot(document.getElementById('root')).render(<App />);

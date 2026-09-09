@@ -20,6 +20,139 @@ function register(router, db) {
     });
   });
 
+  router.get('/api/admin/payment-settings', ...auth, requirePermission(db, 'payments.view'), (req, res) => {
+    const rows = db.prepare("SELECT key, value FROM platform_settings WHERE key IN ('admin_receive_iban', 'payment_instruction')").all();
+    const settings = Object.fromEntries(rows.map((row) => [row.key, row.value]));
+    res.json({
+      adminReceiveIban: settings.admin_receive_iban || '',
+      paymentInstruction: settings.payment_instruction || 'Açıklama kısmına ders başvuru numaranızı yazın.',
+    });
+  });
+
+  router.put('/api/admin/payment-settings', ...auth, requirePermission(db, 'payments.view'), (req, res) => {
+    const iban = String(req.body?.adminReceiveIban || '').replace(/\s+/g, '').toUpperCase();
+    if (!/^TR\d{24}$/.test(iban)) return res.status(400).json({ error: 'Geçerli bir Türkiye IBAN bilgisi girin.' });
+    const instruction = String(req.body?.paymentInstruction || '').trim();
+    if (instruction.length < 5 || instruction.length > 500) {
+      return res.status(400).json({ error: 'Ödeme açıklaması 5 ile 500 karakter arasında olmalı.' });
+    }
+    const now = new Date().toISOString();
+    const save = db.prepare(`
+      INSERT INTO platform_settings (key, value, updated_at) VALUES (?, ?, ?)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+    `);
+    save.run('admin_receive_iban', iban, now);
+    save.run('payment_instruction', instruction, now);
+    res.json({ adminReceiveIban: iban, paymentInstruction: instruction, message: 'Ödeme ayarları güncellendi.' });
+  });
+
+  router.get('/api/admin/payments', ...auth, requirePermission(db, 'payments.view'), (req, res) => {
+    const rows = db.prepare(`
+      SELECT a.*, c.title AS course_title, s.full_name AS student_name, t.full_name AS teacher_name,
+        tp.payout_iban
+      FROM applications a
+      JOIN courses c ON c.id = a.course_id
+      JOIN users s ON s.id = a.student_id
+      JOIN users t ON t.id = a.teacher_id
+      LEFT JOIN teacher_profiles tp ON tp.user_id = a.teacher_id
+      ORDER BY a.created_at DESC
+    `).all();
+    res.json({ payments: rows });
+  });
+
+  router.get('/api/admin/teacher-commissions', ...auth, requirePermission(db, 'commissions.manage'), (req, res) => {
+    const rows = db.prepare(`
+      SELECT u.id AS teacher_id, u.full_name, u.email,
+        COALESCE(tp.commission_rate, 15) AS commission_rate
+      FROM users u
+      JOIN roles r ON r.id = u.role_id
+      LEFT JOIN teacher_profiles tp ON tp.user_id = u.id
+      WHERE r.name = 'TEACHER'
+      ORDER BY u.full_name COLLATE NOCASE
+    `).all();
+    res.json({ teachers: rows });
+  });
+
+  router.patch('/api/admin/teacher-commissions/:teacherId', ...auth, requirePermission(db, 'commissions.manage'), (req, res) => {
+    const teacherId = Number(req.params.teacherId);
+    const rate = Number(req.body?.commissionRate);
+    if (!Number.isFinite(rate) || rate < 0 || rate > 100) {
+      return res.status(400).json({ error: 'Komisyon oranı 0 ile 100 arasında olmalı.' });
+    }
+    const teacher = db.prepare(`
+      SELECT u.id FROM users u JOIN roles r ON r.id = u.role_id
+      WHERE u.id = ? AND r.name = 'TEACHER'
+    `).get(teacherId);
+    if (!teacher) return res.status(404).json({ error: 'Öğretmen bulunamadı.' });
+    const profile = db.prepare('SELECT id FROM teacher_profiles WHERE user_id = ?').get(teacherId);
+    if (profile) {
+      db.prepare('UPDATE teacher_profiles SET commission_rate = ?, updated_at = ? WHERE user_id = ?')
+        .run(rate, new Date().toISOString(), teacherId);
+    } else {
+      const now = new Date().toISOString();
+      db.prepare(`
+        INSERT INTO teacher_profiles (user_id, full_name, subject, payout_iban, commission_rate, created_at, updated_at)
+        SELECT id, full_name, 'Genel', '', ?, ?, ? FROM users WHERE id = ?
+      `).run(rate, now, now, teacherId);
+    }
+    res.json({ teacherId, commissionRate: rate, message: 'Öğretmen komisyon oranı güncellendi.' });
+  });
+
+  router.patch('/api/admin/payments/:id/confirm', ...auth, requirePermission(db, 'payments.view'), (req, res) => {
+    const application = db.prepare(`
+      SELECT a.*, COALESCE(tp.commission_rate, 15) AS current_commission_rate
+      FROM applications a LEFT JOIN teacher_profiles tp ON tp.user_id = a.teacher_id
+      WHERE a.id = ?
+    `).get(Number(req.params.id));
+    if (!application) return res.status(404).json({ error: 'Ders ödeme talebi bulunamadı.' });
+    if (application.payment_status === 'confirmed') return res.json({ message: 'Ödeme zaten doğrulanmış.' });
+    const requestedRate = req.body?.commissionRate === undefined ? application.current_commission_rate : Number(req.body.commissionRate);
+    if (!Number.isFinite(requestedRate) || requestedRate < 0 || requestedRate > 100) {
+      return res.status(400).json({ error: 'Komisyon oranı 0 ile 100 arasında olmalı.' });
+    }
+    const commissionCents = Math.round(application.amount_cents * requestedRate / 100);
+    const teacherPayoutCents = application.amount_cents - commissionCents;
+    const now = new Date().toISOString();
+    db.prepare(`UPDATE applications SET payment_status = 'confirmed', commission_rate = ?, commission_cents = ?, teacher_payout_cents = ?, admin_confirmed_at = ?, updated_at = ? WHERE id = ?`)
+      .run(requestedRate, commissionCents, teacherPayoutCents, now, now, application.id);
+    db.prepare(`
+      INSERT OR IGNORE INTO receipts (application_id, receipt_number, total_cents, commission_cents, teacher_payout_cents, created_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(application.id, `DB-${application.id}-${Date.now()}`, application.amount_cents, commissionCents, teacherPayoutCents, now);
+    db.prepare(`INSERT INTO notifications (user_id, type, title, body, related_id, created_at) VALUES (?, 'payment', 'Ödeme doğrulandı', 'Ödemeniz admin tarafından doğrulandı; öğretmen onayı bekleniyor.', ?, ?), (?, 'payment', 'Yeni ödeme doğrulandı', 'Bir öğrencinin ders ödemesi doğrulandı; dersi kabul edebilirsiniz.', ?, ?)`)
+      .run(application.student_id, application.id, now, application.teacher_id, application.id, now);
+    res.json({ message: 'Ödeme doğrulandı.', commissionRate: requestedRate, commissionCents, teacherPayoutCents });
+  });
+
+  router.patch('/api/admin/payments/:id/payout-sent', ...auth, requirePermission(db, 'commissions.manage'), (req, res) => {
+    const application = db.prepare('SELECT * FROM applications WHERE id = ?').get(Number(req.params.id));
+    if (!application) return res.status(404).json({ error: 'Ödeme kaydı bulunamadı.' });
+    if (application.status !== 'accepted') return res.status(409).json({ error: 'Öğretmen dersi kabul etmeden ödeme payı gönderilemez.' });
+    const now = new Date().toISOString();
+    db.prepare("UPDATE applications SET payout_sent_at = ?, payment_status = 'payout_sent', updated_at = ? WHERE id = ?").run(now, now, application.id);
+    db.prepare(`INSERT INTO notifications (user_id, type, title, body, related_id, created_at) VALUES (?, 'payment', 'Öğretmen payı gönderildi', 'Ders payınız admin tarafından gönderildi.', ?, ?)`)
+      .run(application.teacher_id, application.id, now);
+    res.json({ message: 'Öğretmen payı gönderildi olarak işaretlendi.' });
+  });
+
+  router.get('/api/admin/teacher-documents', ...auth, requirePermission(db, 'teachers.manage'), (req, res) => {
+    const documents = db.prepare(`
+      SELECT d.*, u.full_name AS teacher_name, u.email
+      FROM teacher_documents d JOIN users u ON u.id = d.teacher_id
+      ORDER BY d.created_at DESC
+    `).all();
+    res.json({ documents });
+  });
+
+  router.patch('/api/admin/teacher-documents/:id', ...auth, requirePermission(db, 'teachers.manage'), (req, res) => {
+    const status = String(req.body?.status || '');
+    if (!['approved', 'rejected', 'pending'].includes(status)) return res.status(400).json({ error: 'Geçersiz belge durumu.' });
+    const result = db.prepare('UPDATE teacher_documents SET status = ?, note = ?, reviewed_at = ? WHERE id = ?')
+      .run(status, String(req.body?.note || '').trim().slice(0, 500), new Date().toISOString(), Number(req.params.id));
+    if (!result.changes) return res.status(404).json({ error: 'Belge bulunamadı.' });
+    res.json({ message: 'Belge durumu güncellendi.' });
+  });
+
   // --- Listeleme -----------------------------------------------------------
   router.get('/api/admin/users', ...auth, requirePermission(db, 'users.view'), (req, res) => {
     const { role, q } = req.query;

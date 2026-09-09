@@ -59,6 +59,22 @@ function register(router, db) {
     res.json({ profile });
   });
 
+  router.get('/api/teachers/me/documents', attachUser(db), requireAuth, requireRole('TEACHER'), (req, res) => {
+    const documents = db.prepare('SELECT * FROM teacher_documents WHERE teacher_id = ? ORDER BY created_at DESC').all(req.user.id);
+    res.json({ documents });
+  });
+
+  router.post('/api/teachers/me/documents', attachUser(db), requireAuth, requireRole('TEACHER'), (req, res) => {
+    const documentType = String(req.body?.documentType || '').trim().slice(0, 80);
+    const fileUrl = String(req.body?.fileUrl || '').trim();
+    if (!documentType || !fileUrl.startsWith('/uploads/')) return res.status(400).json({ error: 'Belge türü ve güvenli yükleme yolu gerekli.' });
+    const result = db.prepare(`
+      INSERT INTO teacher_documents (teacher_id, document_type, file_url, status, created_at)
+      VALUES (?, ?, ?, 'pending', ?)
+    `).run(req.user.id, documentType, fileUrl, new Date().toISOString());
+    res.status(201).json({ document: db.prepare('SELECT * FROM teacher_documents WHERE id = ?').get(result.lastInsertRowid) });
+  });
+
   router.get('/api/teachers/:id/profile', (req, res) => {
     const profile = db.prepare(`
       SELECT tp.*, u.email, u.full_name, u.teacher_status
@@ -72,7 +88,7 @@ function register(router, db) {
   });
 
   router.put('/api/teachers/me/profile', attachUser(db), requireAuth, requireRole('TEACHER'), (req, res) => {
-    const { subject, bio, education, experience, isOnline, isInPerson, hourlyPrice, city, photoUrl } = req.body || {};
+    const { subject, bio, education, experience, isOnline, isInPerson, hourlyPrice, city, photoUrl, payoutIban } = req.body || {};
 
     const payload = {
       subject: String(subject || '').trim() || 'Genel',
@@ -84,21 +100,30 @@ function register(router, db) {
       hourly_price: Number(hourlyPrice || 0),
       city: String(city || '').trim(),
       photo_url: String(photoUrl || '').trim(),
+      payout_iban: String(payoutIban || '').replace(/\s+/g, '').toUpperCase(),
       updated_at: new Date().toISOString(),
     };
+
+    if (payload.payout_iban && !/^TR\d{24}$/.test(payload.payout_iban)) {
+      return res.status(400).json({ error: 'Geçerli bir Türkiye IBAN bilgisi girin (TR ile başlayan 26 karakter).' });
+    }
+
+    if (payload.photo_url && !/^https?:\/\//i.test(payload.photo_url) && !payload.photo_url.startsWith('/uploads/')) {
+      return res.status(400).json({ error: 'Fotoğraf sadece güvenli URL veya cihazdan yüklenmiş /uploads/ dosya yolu olabilir.' });
+    }
 
     const exists = db.prepare('SELECT id FROM teacher_profiles WHERE user_id = ?').get(req.user.id);
     if (exists) {
       db.prepare(`
         UPDATE teacher_profiles
-        SET subject = ?, bio = ?, education = ?, experience = ?, is_online = ?, is_in_person = ?, hourly_price = ?, city = ?, photo_url = ?, updated_at = ?
+        SET subject = ?, bio = ?, education = ?, experience = ?, is_online = ?, is_in_person = ?, hourly_price = ?, city = ?, photo_url = ?, payout_iban = ?, updated_at = ?
         WHERE user_id = ?
-      `).run(payload.subject, payload.bio, payload.education, payload.experience, payload.is_online, payload.is_in_person, payload.hourly_price, payload.city, payload.photo_url, payload.updated_at, req.user.id);
+      `).run(payload.subject, payload.bio, payload.education, payload.experience, payload.is_online, payload.is_in_person, payload.hourly_price, payload.city, payload.photo_url, payload.payout_iban, payload.updated_at, req.user.id);
     } else {
       db.prepare(`
-        INSERT INTO teacher_profiles (user_id, full_name, subject, bio, education, experience, is_online, is_in_person, hourly_price, city, photo_url, rating, reviews_count, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?)
-      `).run(req.user.id, req.user.full_name, payload.subject, payload.bio, payload.education, payload.experience, payload.is_online, payload.is_in_person, payload.hourly_price, payload.city, payload.photo_url, new Date().toISOString(), payload.updated_at);
+        INSERT INTO teacher_profiles (user_id, full_name, subject, bio, education, experience, is_online, is_in_person, hourly_price, city, photo_url, payout_iban, rating, reviews_count, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?)
+      `).run(req.user.id, req.user.full_name, payload.subject, payload.bio, payload.education, payload.experience, payload.is_online, payload.is_in_person, payload.hourly_price, payload.city, payload.photo_url, payload.payout_iban, new Date().toISOString(), payload.updated_at);
     }
 
     const profile = db.prepare(`
@@ -153,13 +178,13 @@ function register(router, db) {
   });
 
   router.post('/api/teachers/me/availability', attachUser(db), requireAuth, requireRole('TEACHER'), (req, res) => {
-    const { day, start, duration, color } = req.body || {};
+    const { day, start, duration, color, title } = req.body || {};
     if (!day || !start) return res.status(400).json({ error: 'Gün ve saat gerekli.' });
 
     const result = db.prepare(`
-      INSERT INTO teacher_availability (teacher_id, day_of_week, start_time, duration_min, color, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(req.user.id, String(day), String(start), Number(duration || 60), String(color || '#3b82f6'), new Date().toISOString(), new Date().toISOString());
+      INSERT INTO teacher_availability (teacher_id, day_of_week, start_time, duration_min, color, title, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(req.user.id, String(day), String(start), Number(duration || 60), String(color || '#3b82f6'), String(title || 'Ders').trim().slice(0, 120), new Date().toISOString(), new Date().toISOString());
 
     const block = db.prepare('SELECT * FROM teacher_availability WHERE id = ?').get(result.lastInsertRowid);
     res.status(201).json({ block, message: 'Program bloğu eklendi.' });

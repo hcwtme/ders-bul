@@ -66,8 +66,74 @@ function migrateSchema() {
     is_active      INTEGER NOT NULL DEFAULT 1,
     is_blocked     INTEGER NOT NULL DEFAULT 0,
     teacher_status TEXT,
+    email_verified INTEGER NOT NULL DEFAULT 0,
+    email_verification_token TEXT,
+    email_verification_expires_at TEXT,
     created_at     TEXT NOT NULL,
     updated_at     TEXT NOT NULL
+  );`);
+
+  ensureTable('notifications', `CREATE TABLE IF NOT EXISTS notifications (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    type        TEXT NOT NULL DEFAULT 'info',
+    title       TEXT NOT NULL,
+    body        TEXT NOT NULL,
+    related_id  INTEGER,
+    is_read     INTEGER NOT NULL DEFAULT 0,
+    created_at  TEXT NOT NULL
+  );`);
+
+  ensureTable('payments', `CREATE TABLE IF NOT EXISTS payments (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    course_id   INTEGER REFERENCES courses(id) ON DELETE SET NULL,
+    amount_cents INTEGER NOT NULL DEFAULT 0,
+    currency    TEXT NOT NULL DEFAULT 'TRY',
+    status      TEXT NOT NULL DEFAULT 'pending',
+    provider    TEXT NOT NULL DEFAULT 'manual',
+    note        TEXT,
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL
+  );`);
+
+  ensureTable('platform_settings', `CREATE TABLE IF NOT EXISTS platform_settings (
+    key         TEXT PRIMARY KEY,
+    value       TEXT NOT NULL DEFAULT '',
+    updated_at  TEXT NOT NULL
+  );`);
+
+  ensureTable('email_outbox', `CREATE TABLE IF NOT EXISTS email_outbox (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    recipient   TEXT NOT NULL,
+    subject     TEXT NOT NULL,
+    body        TEXT NOT NULL,
+    status      TEXT NOT NULL DEFAULT 'queued',
+    error       TEXT,
+    created_at  TEXT NOT NULL,
+    sent_at     TEXT
+  );`);
+
+  ensureTable('teacher_documents', `CREATE TABLE IF NOT EXISTS teacher_documents (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    teacher_id  INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    document_type TEXT NOT NULL,
+    file_url    TEXT NOT NULL,
+    status      TEXT NOT NULL DEFAULT 'pending',
+    note        TEXT,
+    created_at  TEXT NOT NULL,
+    reviewed_at TEXT
+  );`);
+
+  ensureTable('receipts', `CREATE TABLE IF NOT EXISTS receipts (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    application_id  INTEGER UNIQUE NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+    receipt_number  TEXT UNIQUE NOT NULL,
+    total_cents     INTEGER NOT NULL,
+    commission_cents INTEGER NOT NULL DEFAULT 0,
+    teacher_payout_cents INTEGER NOT NULL DEFAULT 0,
+    created_at      TEXT NOT NULL
   );`);
 
   ensureTable('teacher_profiles', `CREATE TABLE IF NOT EXISTS teacher_profiles (
@@ -190,6 +256,26 @@ function migrateSchema() {
 
   ensureColumn('courses', 'grade_levels', "TEXT NOT NULL DEFAULT ''");
   ensureColumn('favorites', 'teacher_id', 'INTEGER');
+  ensureColumn('teacher_availability', 'title', "TEXT NOT NULL DEFAULT 'Ders'");
+  ensureColumn('users', 'email_verified', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn('users', 'email_verification_token', 'TEXT');
+  ensureColumn('users', 'email_verification_expires_at', 'TEXT');
+  ensureColumn('users', 'password_reset_token', 'TEXT');
+  ensureColumn('users', 'password_reset_expires_at', 'TEXT');
+  ensureColumn('teacher_profiles', 'payout_iban', 'TEXT');
+  ensureColumn('applications', 'selected_slot', 'TEXT');
+  ensureColumn('applications', 'amount_cents', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn('applications', 'payment_status', "TEXT NOT NULL DEFAULT 'awaiting_transfer'");
+  ensureColumn('applications', 'admin_confirmed_at', 'TEXT');
+  ensureColumn('applications', 'teacher_confirmed_at', 'TEXT');
+  ensureColumn('applications', 'payout_due_at', 'TEXT');
+  ensureColumn('applications', 'payout_sent_at', 'TEXT');
+  ensureColumn('applications', 'selected_day', 'TEXT');
+  ensureColumn('applications', 'cancelled_at', 'TEXT');
+  ensureColumn('applications', 'cancelled_by', 'INTEGER');
+  ensureColumn('applications', 'cancellation_reason', 'TEXT');
+  ensureColumn('applications', 'completed_at', 'TEXT');
+  ensureColumn('applications', 'refund_status', "TEXT NOT NULL DEFAULT 'not_requested'");
 
   try {
     db.exec('CREATE INDEX IF NOT EXISTS idx_users_role ON users(role_id);');
@@ -201,6 +287,10 @@ function migrateSchema() {
     db.exec('CREATE INDEX IF NOT EXISTS idx_favorites_user ON favorites(user_id);');
     db.exec('CREATE INDEX IF NOT EXISTS idx_reviews_teacher ON reviews(teacher_id);');
     db.exec('CREATE INDEX IF NOT EXISTS idx_complaints_user ON complaints(user_id);');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, is_read, created_at);');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_payments_user ON payments(user_id, status);');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_documents_teacher ON teacher_documents(teacher_id, status);');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_email_outbox_status ON email_outbox(status, created_at);');
   } catch (error) {
     const message = String(error.message || '');
     if (!message.includes('duplicate')) throw error;
@@ -268,4 +358,4 @@ function seed() {
 
 seed();
 
-module.exports = { db };
+module.exports = { db, DB_PATH, DATA_DIR };
