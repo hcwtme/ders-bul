@@ -342,17 +342,32 @@ function seed() {
     const { hashPassword } = require('./auth');
     const now = new Date().toISOString();
 
+    // SUPER_ADMIN_EMAIL ve SUPER_ADMIN_PASSWORD ortamdan alınıyor
+    // Render, GitHub Actions vb. CI/CD'den environment variables olarak ayarlanmalıdır
     const adminEmail = process.env.SUPER_ADMIN_EMAIL;
     const adminPassword = process.env.SUPER_ADMIN_PASSWORD;
+    
     if (!adminEmail || !adminPassword) {
-      throw new Error('SUPER_ADMIN_EMAIL ve SUPER_ADMIN_PASSWORD zorunludur.');
+      throw new Error(
+        'SUPER_ADMIN_EMAIL ve SUPER_ADMIN_PASSWORD ortam değişkenleri zorunludur.\n' +
+        'Render, GitHub Actions veya .env dosyasından ayarlanmalıdır.\n' +
+        'Önemli: Bu değerler asla kod içinde hard-code edilmemelidir!'
+      );
     }
+    
+    // Şifreyi kontrol et — en az 8 karakterli olmalı
+    if (adminPassword.length < 8) {
+      throw new Error('SUPER_ADMIN_PASSWORD en az 8 karakter olmalıdır.');
+    }
+
     const adminHash = hashPassword(adminPassword);
     db.prepare(`
       INSERT INTO users (email, password_hash, password_salt, full_name, role_id, is_active, is_blocked, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, 1, 0, ?, ?)
     `).run(adminEmail, adminHash.hash, adminHash.salt, 'Süper Admin', superAdminRole.id, now, now);
-    console.log('Super Admin hesabı oluşturuldu:', adminEmail);
+    
+    console.log('✓ Super Admin hesabı oluşturuldu:', adminEmail);
+    console.log('✓ İlk giriş yaptıktan sonra admin panelinden şifresini değiştirmeyi unutmayın!');
   }
 }
 
