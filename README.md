@@ -39,6 +39,10 @@ node backend/server.js
 
 Tarayıcıda: **http://localhost:4000**
 
+Not: `.env` dosyası yoksa proje otomatik olarak güvenli varsayılan değerlerle
+başlar (`admin@dersbul.com` / `DegistirilecekSifre123!`). Yine de production
+ortamında `.env` dosyasını mutlaka değiştirip güçlü bir şifre kullan.
+
 İlk çalıştırmada otomatik bir Super Admin hesabı oluşturulur, bilgiler konsola
 yazdırılır (varsayılan: `admin@dersbul.com` / `DegistirilecekSifre123!`).
 **Giriş yaptıktan sonra şifreyi mutlaka değiştir** (şifre sıfırlama uç noktası
