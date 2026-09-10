@@ -5,6 +5,9 @@
 
 loadDotEnv();
 
+// Güvenlik: .env değişkenlerini valide et
+validateEnvironment();
+
 const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -14,14 +17,46 @@ const { Router } = require('./router');
 const { register: registerUploads, serveUpload } = require('./uploads');
 
 const PORT = Number(process.env.PORT || 4000);
+const HOST = process.env.HOST || 'localhost'; // Güvenlik: default localhost
 const CORS_ORIGIN = process.env.CORS_ORIGIN || '';
+const NODE_ENV = process.env.NODE_ENV || 'development';
 const FRONTEND_DIR = path.join(__dirname, '..', 'frontend');
 const ERROR_LOG = path.join(__dirname, 'data', 'errors.log');
 
+function validateEnvironment() {
+  const NODE_ENV = process.env.NODE_ENV || 'development';
+  
+  // Production'da CORS kesin belirtilmiş olmalı
+  if (NODE_ENV === 'production') {
+    if (!process.env.CORS_ORIGIN || process.env.CORS_ORIGIN === '*') {
+      console.error('❌ PRODUCTION ortamında CORS_ORIGIN belirtilmek ZORUNLUDUR ve "*" olamaz!');
+      process.exit(1);
+    }
+    console.log('✓ Production mode: CORS kıstlı');
+  }
+  
+  // Super Admin değişkenleri kontrol et
+  if (!process.env.SUPER_ADMIN_EMAIL || !process.env.SUPER_ADMIN_PASSWORD) {
+    console.warn('⚠️  SUPER_ADMIN_EMAIL ve SUPER_ADMIN_PASSWORD ayarlanmamış. Veritabanında kullanıcı varsa sorun olmaz.');
+  }
+}
+
 function logError(error, context = {}) {
-  const entry = JSON.stringify({ at: new Date().toISOString(), message: error?.message || String(error), stack: error?.stack, ...context });
-  fs.appendFileSync(ERROR_LOG, `${entry}\n`);
-  console.error(entry);
+  const entry = JSON.stringify({ 
+    at: new Date().toISOString(), 
+    message: error?.message || String(error), 
+    stack: NODE_ENV === 'development' ? error?.stack : undefined,
+    ...context 
+  });
+  
+  // Üretim ortamında hata logları dosyaya yazılır ve hassas bilgiler saklanır
+  if (NODE_ENV === 'development') {
+    fs.appendFileSync(ERROR_LOG, `${entry}\n`);
+    console.error(entry);
+  } else {
+    // Production: sadece temel bilgi loglanır
+    fs.appendFileSync(ERROR_LOG, `${entry}\n`);
+  }
 }
 
 const router = new Router();
@@ -98,16 +133,38 @@ function enhanceResponse(res) {
 const server = http.createServer(async (req, res) => {
   const requestOrigin = req.headers.origin;
   const allowedOrigin = CORS_ORIGIN === '*' ? requestOrigin || '*' : CORS_ORIGIN;
-  if (allowedOrigin) res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
-  if (requestOrigin && allowedOrigin === requestOrigin) res.setHeader('Vary', 'Origin');
+  
+  // Güvenlik: Origin kontrol et
+  if (allowedOrigin && allowedOrigin !== '*') {
+    res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
+  }
+  
+  if (requestOrigin && allowedOrigin === requestOrigin) {
+    res.setHeader('Vary', 'Origin');
+  }
+  
+  // Güvenlik başlıkları
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PATCH,PUT,DELETE,OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('X-XSS-Protection', '1; mode=block');
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
   res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
-  res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' https://unpkg.com 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data: https:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'");
-  if (req.url.startsWith('/api/')) res.setHeader('Cache-Control', 'no-store');
+  
+  // Content-Security-Policy: XSS koruması
+  res.setHeader(
+    'Content-Security-Policy',
+    NODE_ENV === 'production'
+      ? "default-src 'self'; script-src 'self' https://unpkg.com; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; font-src 'self'"
+      : "default-src 'self'; script-src 'self' https://unpkg.com 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:"
+  );
+  
+  // Cache kontrol
+  if (req.url.startsWith('/api/')) {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  }
+  
   if (req.method === 'OPTIONS') { res.writeHead(204); return res.end(); }
 
   enhanceResponse(res);
@@ -140,9 +197,10 @@ const server = http.createServer(async (req, res) => {
 process.on('uncaughtException', (error) => logError(error, { type: 'uncaughtException' }));
 process.on('unhandledRejection', (error) => logError(error, { type: 'unhandledRejection' }));
 
-server.listen(PORT, () => {
-  console.log(`Ders Bul backend http://localhost:${PORT} adresinde çalışıyor.`);
-  console.log(`Frontend de aynı porttan sunuluyor (statik dosyalar): http://localhost:${PORT}`);
+server.listen(PORT, HOST, () => {
+  console.log(`Ders Bul backend http://${HOST}:${PORT} adresinde çalışıyor.`);
+  console.log(`Frontend de aynı porttan sunuluyor (statik dosyalar): http://${HOST}:${PORT}`);
+  console.log(`Ortam: ${NODE_ENV}`);
 });
 
 // --- .env dosyasını harici pakete gerek kalmadan yükleyen küçük yardımcı ---
