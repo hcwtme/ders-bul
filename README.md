@@ -39,14 +39,15 @@ node backend/server.js
 
 Tarayıcıda: **http://localhost:4000**
 
-Not: `.env` dosyası yoksa proje otomatik olarak güvenli varsayılan değerlerle
-başlar (`admin@dersbul.com` / `DegistirilecekSifre123!`). Yine de production
-ortamında `.env` dosyasını mutlaka değiştirip güçlü bir şifre kullan.
+İlk çalıştırmada kullanıcı tablosu boşsa Super Admin hesabı oluşturulur.
+`SUPER_ADMIN_EMAIL` ve `SUPER_ADMIN_PASSWORD` zorunludur; değişkenlerden biri
+eksikse uygulama güvenlik nedeniyle başlamaz. Şifre en az 16 karakter olmalıdır.
+Render üzerinde bu iki değeri Dashboard → Environment → Secret olarak ekle;
+değerleri kaynak koda veya herkese açık `render.yaml` dosyasına yazma.
 
-İlk çalıştırmada otomatik bir Super Admin hesabı oluşturulur, bilgiler konsola
-yazdırılır (varsayılan: `admin@dersbul.com` / `DegistirilecekSifre123!`).
-**Giriş yaptıktan sonra şifreyi mutlaka değiştir** (şifre sıfırlama uç noktası
-üzerinden; ayrılmış bir "profilim" ekranı sonraki modülde eklenecek).
+Render Free disk alanı kalıcı değildir. SQLite veritabanı ve yüklenen görseller
+yeniden deploy/restart sonrasında silinebilir; gerçek production için harici
+kalıcı veritabanı ve obje depolama kullan.
 
 Node.js **v20 veya üzeri** gerekir (`node:sqlite` için v22.5+ önerilir; bu ortamda
 v22.22 ile test edildi).

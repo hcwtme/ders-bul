@@ -342,10 +342,14 @@ function seed() {
     const { hashPassword } = require('./auth');
     const now = new Date().toISOString();
 
-    const adminEmail = process.env.SUPER_ADMIN_EMAIL || 'admin@dersbul.com';
-    const adminPassword = process.env.SUPER_ADMIN_PASSWORD || 'DegistirilecekSifre123!';
-    process.env.SUPER_ADMIN_EMAIL = adminEmail;
-    process.env.SUPER_ADMIN_PASSWORD = adminPassword;
+    const adminEmail = process.env.SUPER_ADMIN_EMAIL;
+    const adminPassword = process.env.SUPER_ADMIN_PASSWORD;
+    if (!adminEmail || !adminPassword) {
+      throw new Error('SUPER_ADMIN_EMAIL ve SUPER_ADMIN_PASSWORD zorunludur.');
+    }
+    if (adminPassword.length < 16) {
+      throw new Error('SUPER_ADMIN_PASSWORD en az 16 karakter olmalıdır.');
+    }
     const adminHash = hashPassword(adminPassword);
     db.prepare(`
       INSERT INTO users (email, password_hash, password_salt, full_name, role_id, is_active, is_blocked, created_at, updated_at)

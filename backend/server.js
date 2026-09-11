@@ -36,6 +36,18 @@ router.get('/api/health', (req, res) => {
   res.json({ status: 'ok', service: 'ders-bul' });
 });
 
+router.get('/robots.txt', (req, res) => {
+  const siteUrl = String(process.env.SITE_URL || `http://${req.headers.host}`).replace(/\/+$/, '');
+  res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+  res.end(`User-agent: *\nAllow: /\nDisallow: /api/\nDisallow: /uploads/\nSitemap: ${siteUrl}/sitemap.xml\n`);
+});
+
+router.get('/sitemap.xml', (req, res) => {
+  const siteUrl = String(process.env.SITE_URL || `http://${req.headers.host}`).replace(/\/+$/, '');
+  res.setHeader('Content-Type', 'application/xml; charset=utf-8');
+  res.end(`<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>${siteUrl}/</loc></url></urlset>`);
+});
+
 router.get('/api/site-settings', (req, res) => {
   res.json({
     whatsappNumber: process.env.WHATSAPP_NUMBER || '',
@@ -49,6 +61,8 @@ const MIME = {
   '.css': 'text/css; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
   '.svg': 'image/svg+xml',
+  '.txt': 'text/plain; charset=utf-8',
+  '.xml': 'application/xml; charset=utf-8',
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
 };
@@ -58,6 +72,7 @@ function serveStatic(req, res) {
   let filePath = path.join(FRONTEND_DIR, url.pathname === '/' ? 'index.html' : url.pathname);
   if (!filePath.startsWith(FRONTEND_DIR)) { res.writeHead(403); res.end('Forbidden'); return true; }
   if (!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
+    if (path.extname(url.pathname)) return false;
     // SPA fallback: bilinmeyen frontend rotalarında index.html döndür
     filePath = path.join(FRONTEND_DIR, 'index.html');
     if (!fs.existsSync(filePath)) return false;
@@ -106,6 +121,9 @@ const server = http.createServer(async (req, res) => {
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
   res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  if (req.headers['x-forwarded-proto'] === 'https') {
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  }
   res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' https://unpkg.com 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data: https:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'");
   if (req.url.startsWith('/api/')) res.setHeader('Cache-Control', 'no-store');
   if (req.method === 'OPTIONS') { res.writeHead(204); return res.end(); }
@@ -116,6 +134,9 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname.startsWith('/uploads/')) {
     if (serveUpload(req, res, url.pathname)) return;
     return res.status(404).json({ error: 'Yüklenen dosya bulunamadı.' });
+  }
+  if (url.pathname === '/robots.txt' || url.pathname === '/sitemap.xml') {
+    return router.handle(req, res);
   }
   if (!url.pathname.startsWith('/api/')) {
     if (serveStatic(req, res)) return;
