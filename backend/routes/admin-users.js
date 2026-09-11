@@ -29,6 +29,81 @@ function register(router, db) {
     });
   });
 
+  router.get('/api/admin/site-settings', ...auth, requirePermission(db, 'payments.view'), (req, res) => {
+    const rows = db.prepare("SELECT key, value FROM platform_settings WHERE key IN ('site_name', 'site_tagline', 'hero_title', 'hero_subtitle', 'cta_text', 'whatsapp_number', 'whatsapp_label')").all();
+    const settings = Object.fromEntries(rows.map((row) => [row.key, row.value]));
+    res.json({
+      siteName: settings.site_name || 'Ders Bul',
+      siteTagline: settings.site_tagline || 'Özel ders merkezi',
+      heroTitle: settings.hero_title || 'Haftalık ders planını tek ekranda hazırla.',
+      heroSubtitle: settings.hero_subtitle || 'Öğretmenler ders saatlerini kolayca seçer, haftalık program oluşturur ve ilanlarını net şekilde yayınlar.',
+      ctaText: settings.cta_text || 'Hemen başla',
+      whatsappNumber: settings.whatsapp_number || process.env.WHATSAPP_NUMBER || '',
+      whatsappLabel: settings.whatsapp_label || process.env.WHATSAPP_LABEL || 'WhatsApp iletişim hattı',
+    });
+  });
+
+  router.put('/api/admin/site-settings', ...auth, requirePermission(db, 'payments.view'), (req, res) => {
+    const payload = req.body || {};
+    const existing = Object.fromEntries(
+      db.prepare("SELECT key, value FROM platform_settings WHERE key IN ('site_name', 'site_tagline', 'hero_title', 'hero_subtitle', 'cta_text', 'whatsapp_number', 'whatsapp_label')").all().map((row) => [row.key, row.value])
+    );
+
+    const siteName = String(payload.siteName ?? existing.site_name ?? 'Ders Bul').trim();
+    const siteTagline = String(payload.siteTagline ?? existing.site_tagline ?? 'Özel ders merkezi').trim();
+    const heroTitle = String(payload.heroTitle ?? existing.hero_title ?? 'Haftalık ders planını tek ekranda hazırla.').trim();
+    const heroSubtitle = String(payload.heroSubtitle ?? existing.hero_subtitle ?? 'Öğretmenler ders saatlerini kolayca seçer, haftalık program oluşturur ve ilanlarını net şekilde yayınlar.').trim();
+    const ctaText = String(payload.ctaText ?? existing.cta_text ?? 'Hemen başla').trim();
+    const whatsappNumber = String(payload.whatsappNumber ?? existing.whatsapp_number ?? '').trim();
+    const whatsappLabel = String(payload.whatsappLabel ?? existing.whatsapp_label ?? 'WhatsApp iletişim hattı').trim();
+
+    if (!siteName || siteName.length < 2 || siteName.length > 80) {
+      return res.status(400).json({ error: 'Site adı 2 ile 80 karakter arasında olmalı.' });
+    }
+    if (!siteTagline || siteTagline.length < 2 || siteTagline.length > 80) {
+      return res.status(400).json({ error: 'Site sloganı 2 ile 80 karakter arasında olmalı.' });
+    }
+    if (!heroTitle || heroTitle.length < 5 || heroTitle.length > 120) {
+      return res.status(400).json({ error: 'Hero başlığı 5 ile 120 karakter arasında olmalı.' });
+    }
+    if (!heroSubtitle || heroSubtitle.length < 10 || heroSubtitle.length > 220) {
+      return res.status(400).json({ error: 'Hero açıklaması 10 ile 220 karakter arasında olmalı.' });
+    }
+    if (!ctaText || ctaText.length < 2 || ctaText.length > 40) {
+      return res.status(400).json({ error: 'CTA metni 2 ile 40 karakter arasında olmalı.' });
+    }
+    if (whatsappNumber && !/^\+?[0-9\s()-]{8,20}$/.test(whatsappNumber)) {
+      return res.status(400).json({ error: 'WhatsApp numarası sadece sayı, + ve boşluk içerebilir.' });
+    }
+    if (!whatsappLabel || whatsappLabel.length < 3 || whatsappLabel.length > 80) {
+      return res.status(400).json({ error: 'İletişim etiketi 3 ile 80 karakter arasında olmalı.' });
+    }
+
+    const now = new Date().toISOString();
+    const save = db.prepare(`
+      INSERT INTO platform_settings (key, value, updated_at) VALUES (?, ?, ?)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+    `);
+    save.run('site_name', siteName, now);
+    save.run('site_tagline', siteTagline, now);
+    save.run('hero_title', heroTitle, now);
+    save.run('hero_subtitle', heroSubtitle, now);
+    save.run('cta_text', ctaText, now);
+    save.run('whatsapp_number', whatsappNumber, now);
+    save.run('whatsapp_label', whatsappLabel, now);
+
+    res.json({
+      siteName,
+      siteTagline,
+      heroTitle,
+      heroSubtitle,
+      ctaText,
+      whatsappNumber,
+      whatsappLabel,
+      message: 'Site ayarları kaydedildi.',
+    });
+  });
+
   router.put('/api/admin/payment-settings', ...auth, requirePermission(db, 'payments.view'), (req, res) => {
     const iban = String(req.body?.adminReceiveIban || '').replace(/\s+/g, '').toUpperCase();
     if (!/^TR\d{24}$/.test(iban)) return res.status(400).json({ error: 'Geçerli bir Türkiye IBAN bilgisi girin.' });
@@ -73,7 +148,7 @@ function register(router, db) {
     res.json({ teachers: rows });
   });
 
-  router.patch('/api/admin/teacher-commissions/:teacherId', ...auth, requirePermission(db, 'commissions.manage'), (req, res) => {
+  router.patch('/api/admin/teacher-commissions/:teacherId', ...auth, requireRole('SUPER_ADMIN'), (req, res) => {
     const teacherId = Number(req.params.teacherId);
     const rate = Number(req.body?.commissionRate);
     if (!Number.isFinite(rate) || rate < 0 || rate > 100) {
@@ -95,6 +170,7 @@ function register(router, db) {
         SELECT id, full_name, 'Genel', '', ?, ?, ? FROM users WHERE id = ?
       `).run(rate, now, now, teacherId);
     }
+    logAdminAction(db, { actorUserId: req.user.id, action: 'teacher_commission_updated', targetType: 'user', targetId: teacherId, detail: `commissionRate=${rate}`, ip: req.socket.remoteAddress });
     res.json({ teacherId, commissionRate: rate, message: 'Öğretmen komisyon oranı güncellendi.' });
   });
 
@@ -106,7 +182,7 @@ function register(router, db) {
     `).get(Number(req.params.id));
     if (!application) return res.status(404).json({ error: 'Ders ödeme talebi bulunamadı.' });
     if (application.payment_status === 'confirmed') return res.json({ message: 'Ödeme zaten doğrulanmış.' });
-    const requestedRate = req.body?.commissionRate === undefined ? application.current_commission_rate : Number(req.body.commissionRate);
+    const requestedRate = Number(application.current_commission_rate);
     if (!Number.isFinite(requestedRate) || requestedRate < 0 || requestedRate > 100) {
       return res.status(400).json({ error: 'Komisyon oranı 0 ile 100 arasında olmalı.' });
     }
@@ -121,6 +197,7 @@ function register(router, db) {
     `).run(application.id, `DB-${application.id}-${Date.now()}`, application.amount_cents, commissionCents, teacherPayoutCents, now);
     db.prepare(`INSERT INTO notifications (user_id, type, title, body, related_id, created_at) VALUES (?, 'payment', 'Ödeme doğrulandı', 'Ödemeniz admin tarafından doğrulandı; öğretmen onayı bekleniyor.', ?, ?), (?, 'payment', 'Yeni ödeme doğrulandı', 'Bir öğrencinin ders ödemesi doğrulandı; dersi kabul edebilirsiniz.', ?, ?)`)
       .run(application.student_id, application.id, now, application.teacher_id, application.id, now);
+    logAdminAction(db, { actorUserId: req.user.id, action: 'payment_confirmed', targetType: 'application', targetId: application.id, detail: `amountCents=${application.amount_cents};commissionCents=${commissionCents};teacherPayoutCents=${teacherPayoutCents}`, ip: req.socket.remoteAddress });
     res.json({ message: 'Ödeme doğrulandı.', commissionRate: requestedRate, commissionCents, teacherPayoutCents });
   });
 
@@ -132,6 +209,7 @@ function register(router, db) {
     db.prepare("UPDATE applications SET payout_sent_at = ?, payment_status = 'payout_sent', updated_at = ? WHERE id = ?").run(now, now, application.id);
     db.prepare(`INSERT INTO notifications (user_id, type, title, body, related_id, created_at) VALUES (?, 'payment', 'Öğretmen payı gönderildi', 'Ders payınız admin tarafından gönderildi.', ?, ?)`)
       .run(application.teacher_id, application.id, now);
+    logAdminAction(db, { actorUserId: req.user.id, action: 'teacher_payout_marked_sent', targetType: 'application', targetId: application.id, detail: `teacherPayoutCents=${application.teacher_payout_cents || 0}`, ip: req.socket.remoteAddress });
     res.json({ message: 'Öğretmen payı gönderildi olarak işaretlendi.' });
   });
 

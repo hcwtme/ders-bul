@@ -49,9 +49,16 @@ router.get('/sitemap.xml', (req, res) => {
 });
 
 router.get('/api/site-settings', (req, res) => {
+  const rows = db.prepare("SELECT key, value FROM platform_settings WHERE key IN ('site_name', 'site_tagline', 'hero_title', 'hero_subtitle', 'cta_text', 'whatsapp_number', 'whatsapp_label')").all();
+  const settings = Object.fromEntries(rows.map((row) => [row.key, row.value]));
   res.json({
-    whatsappNumber: process.env.WHATSAPP_NUMBER || '',
-    whatsappLabel: process.env.WHATSAPP_LABEL || 'WhatsApp iletişim hattı',
+    siteName: settings.site_name || 'Ders Bul',
+    siteTagline: settings.site_tagline || 'Özel ders merkezi',
+    heroTitle: settings.hero_title || 'Haftalık ders planını tek ekranda hazırla.',
+    heroSubtitle: settings.hero_subtitle || 'Öğretmenler ders saatlerini kolayca seçer, haftalık program oluşturur ve ilanlarını net şekilde yayınlar.',
+    ctaText: settings.cta_text || 'Hemen başla',
+    whatsappNumber: settings.whatsapp_number || process.env.WHATSAPP_NUMBER || '',
+    whatsappLabel: settings.whatsapp_label || process.env.WHATSAPP_LABEL || 'WhatsApp iletişim hattı',
   });
 });
 

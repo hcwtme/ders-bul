@@ -38,11 +38,17 @@ function logAdminAction(db, { actorUserId = null, action, targetType, targetId, 
 
 function register(router, db) {
   router.post('/api/auth/register', rateLimit({ windowMs: 60_000, max: 10, key: 'register' }), (req, res) => {
-    const { email, password, fullName, role, payoutIban } = req.body || {};
+    const payload = req.body || {};
+    const email = String(payload.email || '').trim();
+    const password = String(payload.password || '');
+    const fullName = String(payload.fullName || payload.full_name || '').trim();
+    const rawRole = String(payload.role || payload.role_name || '').trim().toUpperCase();
+    const role = rawRole === 'TEACHER' || rawRole === 'STUDENT' ? rawRole : (payload.role || '').toString().trim().toUpperCase();
+    const payoutIban = String(payload.payoutIban || payload.payout_iban || '').trim();
 
     if (!isValidEmail(email)) return res.status(400).json({ error: 'Geçerli bir e-posta adresi girin.' });
     if (!isValidPassword(password)) return res.status(400).json({ error: 'Şifre en az 8 karakter olmalı.' });
-    if (!fullName || fullName.trim().length < 2) return res.status(400).json({ error: 'Ad soyad girin.' });
+    if (!fullName || fullName.length < 2) return res.status(400).json({ error: 'Ad soyad girin.' });
     if (!['STUDENT', 'TEACHER'].includes(role)) {
       return res.status(400).json({ error: 'Rol yalnızca STUDENT veya TEACHER olabilir.' });
     }
@@ -64,13 +70,13 @@ function register(router, db) {
     const info = db.prepare(`
       INSERT INTO users (email, password_hash, password_salt, full_name, role_id, is_active, is_blocked, teacher_status, email_verified, email_verification_token, email_verification_expires_at, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, 1, 0, ?, 0, ?, ?, ?, ?)
-    `).run(email.toLowerCase(), hash, salt, fullName.trim(), roleRow.id, teacherStatus, verificationToken, verificationExpiresAt, now, now);
+    `).run(email.toLowerCase(), hash, salt, fullName, roleRow.id, teacherStatus, verificationToken, verificationExpiresAt, now, now);
 
     if (role === 'TEACHER') {
       db.prepare(`
         INSERT INTO teacher_profiles (user_id, full_name, subject, bio, education, experience, is_online, is_in_person, hourly_price, city, photo_url, payout_iban, rating, reviews_count, created_at, updated_at)
         VALUES (?, ?, 'Genel', '', '', '', 1, 1, 0, '', '', ?, 0, 0, ?, ?)
-      `).run(info.lastInsertRowid, fullName.trim(), normalizedPayoutIban, now, now);
+      `).run(info.lastInsertRowid, fullName, normalizedPayoutIban, now, now);
     }
 
     ensureNotification(db, info.lastInsertRowid, 'welcome', 'Hesabınız hazır', 'E-posta doğrulamanızı tamamlayın.', info.lastInsertRowid);

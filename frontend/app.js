@@ -35,17 +35,46 @@ function useAuth() {
 }
 
 async function apiCall(token, method, path, body) {
-  const res = await fetch(`${API_BASE}${path}`, {
+  let res;
+  try {
+    res = await fetch(`${API_BASE}${path}`, {
     method,
     headers: {
       'Content-Type': 'application/json',
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
     body: body ? JSON.stringify(body) : undefined,
-  });
+    });
+  } catch {
+    throw new Error('İnternet bağlantısı kurulamadı. Bağlantınızı kontrol edip tekrar deneyin.');
+  }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || 'Bir hata oluştu.');
   return data;
+}
+
+function LoadingState({ label = 'Yükleniyor...' }) {
+  return <div className="loading-state" role="status" aria-live="polite"><span className="spinner" aria-hidden="true" /> <span>{label}</span></div>;
+}
+
+function EmptyState({ title = 'Sonuç bulunamadı', message = 'Filtreleri değiştirerek tekrar deneyebilirsin.', action }) {
+  return <div className="card empty-state"><div className="empty-state-icon" aria-hidden="true">⌕</div><h3>{title}</h3><p className="muted">{message}</p>{action}</div>;
+}
+
+function ConnectionBanner() {
+  const [online, setOnline] = useState(navigator.onLine);
+  useEffect(() => {
+    const onOnline = () => setOnline(true);
+    const onOffline = () => setOnline(false);
+    window.addEventListener('online', onOnline);
+    window.addEventListener('offline', onOffline);
+    return () => { window.removeEventListener('online', onOnline); window.removeEventListener('offline', onOffline); };
+  }, []);
+  return !online && <div className="offline-banner" role="alert">İnternet bağlantısı yok. Bağlantı gelince tekrar deneyin.</div>;
+}
+
+function NotFoundPage() {
+  return <main className="not-found-page"><div className="not-found-card"><span className="eyebrow">404 · Sayfa bulunamadı</span><strong>Üzgünüz, bu sayfayı bulamadık.</strong><p className="muted">Adres değişmiş olabilir. Ana sayfaya dönerek devam edebilirsin.</p><a className="btn" href="/">Ana sayfaya dön</a></div></main>;
 }
 
 function useCatalog() {
@@ -64,11 +93,19 @@ function AuthScreen({ onLogin, initialMode = 'login' }) {
   const [form, setForm] = useState({ email: '', password: '', fullName: '', payoutIban: '' });
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [fieldErrors, setFieldErrors] = useState({});
   const [busy, setBusy] = useState(false);
 
   const submit = async (e) => {
     e.preventDefault();
-    setError(''); setSuccess(''); setBusy(true);
+    setError(''); setSuccess(''); setFieldErrors({});
+    const nextErrors = {};
+    if (!form.email.trim()) nextErrors.email = 'E-posta adresi zorunludur.';
+    if (mode !== 'forgot' && form.password.length < 8) nextErrors.password = 'Şifre en az 8 karakter olmalıdır.';
+    if (mode === 'register' && form.fullName.trim().length < 2) nextErrors.fullName = 'Ad soyad en az 2 karakter olmalıdır.';
+    if (mode === 'register' && role === 'TEACHER' && !/^TR\d{24}$/.test(form.payoutIban.replace(/\s+/g, '').toUpperCase())) nextErrors.payoutIban = 'IBAN TR ile başlamalı ve 26 karakter olmalıdır.';
+    if (Object.keys(nextErrors).length) { setFieldErrors(nextErrors); setError('Lütfen işaretli alanları düzeltin.'); return; }
+    setBusy(true);
     try {
       if (mode === 'forgot') {
         const data = await apiCall(null, 'POST', '/api/auth/request-password-reset', { email: form.email });
@@ -100,21 +137,23 @@ function AuthScreen({ onLogin, initialMode = 'login' }) {
           {mode === 'register' && (
             <>
               <label>Ad Soyad</label>
-              <input value={form.fullName} onChange={(e) => setForm({ ...form, fullName: e.target.value })} required />
+              <input aria-invalid={Boolean(fieldErrors.fullName)} value={form.fullName} onChange={(e) => setForm({ ...form, fullName: e.target.value })} required />
+              {fieldErrors.fullName && <small className="field-error">{fieldErrors.fullName}</small>}
 
               <label>Ben bir...</label>
               <div className="role-toggle">
                 <button type="button" className={role === 'STUDENT' ? 'active' : ''} onClick={() => setRole('STUDENT')}>Öğrenciyim</button>
                 <button type="button" className={role === 'TEACHER' ? 'active' : ''} onClick={() => setRole('TEACHER')}>Öğretmenim</button>
               </div>
-              {role === 'TEACHER' && <><label>Ödeme IBAN'ı</label><input value={form.payoutIban} onChange={(e) => setForm({ ...form, payoutIban: e.target.value })} placeholder="TR ile başlayan 26 karakter" required /></>}
+              {role === 'TEACHER' && <><label>Ödeme IBAN'ı</label><input aria-invalid={Boolean(fieldErrors.payoutIban)} value={form.payoutIban} onChange={(e) => setForm({ ...form, payoutIban: e.target.value })} placeholder="TR ile başlayan 26 karakter" required />{fieldErrors.payoutIban && <small className="field-error">{fieldErrors.payoutIban}</small>}</>}
             </>
           )}
 
           <label>E-posta</label>
-          <input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} required />
+          <input aria-invalid={Boolean(fieldErrors.email)} type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} required />
+          {fieldErrors.email && <small className="field-error">{fieldErrors.email}</small>}
 
-          {mode !== 'forgot' && <><label>Şifre</label><input type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} required minLength={8} /></>}
+          {mode !== 'forgot' && <><label>Şifre</label><input aria-invalid={Boolean(fieldErrors.password)} type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} required minLength={8} />{fieldErrors.password && <small className="field-error">{fieldErrors.password}</small>}</>}
 
           {error && <div className="error-box">{error}</div>}
           {success && <div className="success-box">{success}</div>}
@@ -174,6 +213,11 @@ function DashboardShell({ user, token, onLogout }) {
       : [['discover', 'Ders keşfet'], ['applications', 'Başvurularım'], ['messages', 'Mesajlar'], ['complaints', 'Destek']];
 
   const selectSection = (next) => { setSection(next); setMenuOpen(false); };
+  useEffect(() => {
+    const closeOnEscape = (event) => { if (event.key === 'Escape') setMenuOpen(false); };
+    document.addEventListener('keydown', closeOnEscape);
+    return () => document.removeEventListener('keydown', closeOnEscape);
+  }, []);
   const content = isAdmin
     ? <AdminDashboard key={section} token={token} user={user} initialTab={section} />
     : user.role === 'TEACHER'
@@ -182,9 +226,10 @@ function DashboardShell({ user, token, onLogout }) {
 
   return <>
     <Topbar user={user} onLogout={onLogout} />
-    <button className="mobile-menu-btn" type="button" onClick={() => setMenuOpen(!menuOpen)} aria-expanded={menuOpen}>☰ Menü</button>
+    <button className="mobile-menu-btn" type="button" onClick={() => setMenuOpen(!menuOpen)} aria-expanded={menuOpen} aria-controls="dashboard-navigation">{menuOpen ? '× Kapat' : '☰ Menü'}</button>
     <div className={`dashboard-layout ${menuOpen ? 'menu-open' : ''}`}>
-      <aside className="side-nav">
+      {menuOpen && <button className="nav-backdrop" type="button" aria-label="Menüyü kapat" onClick={() => setMenuOpen(false)} />}
+      <aside className="side-nav" id="dashboard-navigation">
         <div className="side-nav-user"><strong>{user.full_name}</strong><span>{roleLabel(user.role)}</span></div>
         <nav aria-label="Ana menü">{items.map(([key, label]) => <button key={key} className={section === key ? 'active' : ''} type="button" onClick={() => selectSection(key)}>{label}</button>)}</nav>
         <button className="side-logout" type="button" onClick={onLogout}>Çıkış yap</button>
@@ -852,6 +897,8 @@ function AdminDashboard({ token, user, initialTab = 'overview' }) {
 function AdminPaymentsPanel({ token }) {
   const [iban, setIban] = useState('');
   const [instruction, setInstruction] = useState('Açıklama kısmına ders başvuru numaranızı yazın.');
+  const [whatsappNumber, setWhatsappNumber] = useState('');
+  const [whatsappLabel, setWhatsappLabel] = useState('WhatsApp iletişim hattı');
   const [payments, setPayments] = useState([]);
   const [teachers, setTeachers] = useState([]);
   const [rates, setRates] = useState({});
@@ -859,13 +906,16 @@ function AdminPaymentsPanel({ token }) {
   const [error, setError] = useState('');
   const load = useCallback(async () => {
     try {
-      const [settings, data, teacherData] = await Promise.all([
+      const [settings, siteSettings, data, teacherData] = await Promise.all([
         apiCall(token, 'GET', '/api/admin/payment-settings'),
+        apiCall(token, 'GET', '/api/admin/site-settings'),
         apiCall(token, 'GET', '/api/admin/payments'),
         apiCall(token, 'GET', '/api/admin/teacher-commissions'),
       ]);
       setIban(settings.adminReceiveIban || '');
       setInstruction(settings.paymentInstruction || 'Açıklama kısmına ders başvuru numaranızı yazın.');
+      setWhatsappNumber(siteSettings.whatsappNumber || '');
+      setWhatsappLabel(siteSettings.whatsappLabel || 'WhatsApp iletişim hattı');
       setPayments(data.payments || []);
       setTeachers(teacherData.teachers || []);
       setRates(Object.fromEntries((teacherData.teachers || []).map((teacher) => [teacher.teacher_id, teacher.commission_rate])));
@@ -875,6 +925,11 @@ function AdminPaymentsPanel({ token }) {
   const saveIban = async (event) => {
     event.preventDefault(); setError(''); setMessage('');
     try { await apiCall(token, 'PUT', '/api/admin/payment-settings', { adminReceiveIban: iban, paymentInstruction: instruction }); setMessage('IBAN ve ödeme açıklaması kaydedildi.'); }
+    catch (err) { setError(err.message); }
+  };
+  const saveSiteContact = async (event) => {
+    event.preventDefault(); setError(''); setMessage('');
+    try { await apiCall(token, 'PUT', '/api/admin/site-settings', { whatsappNumber, whatsappLabel }); setMessage('WhatsApp iletişim hattı kaydedildi.'); }
     catch (err) { setError(err.message); }
   };
   const action = async (id, endpoint, body) => {
@@ -895,7 +950,7 @@ function AdminPaymentsPanel({ token }) {
     link.click();
     URL.revokeObjectURL(link.href);
   };
-  return <div className="card"><div className="section-row"><div><h2>Komisyon ve ödemeler</h2><p className="muted">Excel görünümünde takip et. Varsayılan öğretmen komisyonu %15'tir.</p></div><button className="btn small secondary" type="button" onClick={exportCsv}>Excel olarak indir</button></div><form onSubmit={saveIban}><label>Öğrencilerin ödeme yapacağı admin IBAN</label><input value={iban} onChange={(e) => setIban(e.target.value)} placeholder="TR ile başlayan 26 karakter" required /><label>Öğrenciye gösterilecek ödeme açıklaması</label><textarea value={instruction} onChange={(e) => setInstruction(e.target.value)} maxLength={500} rows="3" required /><p className="muted">Her işlem için öğrenciye ayrıca otomatik referans numarası gösterilir.</p><button className="btn small" type="submit">Ödeme ayarlarını kaydet</button></form>{message && <div className="success-box">{message}</div>}{error && <div className="error-box">{error}</div>}<h3 className="payment-section-title">Öğretmen komisyon oranları</h3><div className="table-scroll"><table><thead><tr><th>Öğretmen</th><th>Komisyon %</th><th>İşlem</th></tr></thead><tbody>{teachers.map((teacher) => <tr key={teacher.teacher_id}><td>{teacher.full_name}<div className="muted">{teacher.email}</div></td><td><input className="rate-input" type="number" min="0" max="100" step="0.01" value={rates[teacher.teacher_id] ?? 15} onChange={(event) => setRates({ ...rates, [teacher.teacher_id]: event.target.value })} /></td><td><button className="btn small secondary" type="button" onClick={() => saveRate(teacher.teacher_id)}>Kaydet</button></td></tr>)}</tbody></table></div><h3 className="payment-section-title">Ödeme kayıtları</h3><div className="table-scroll"><table><thead><tr><th>Başvuru / Ders</th><th>Taraflar</th><th>Toplam</th><th>Komisyon</th><th>Öğretmen Payı</th><th>Durum</th><th>İşlem</th></tr></thead><tbody>{payments.map((item) => <tr key={item.id}><td><strong>DERS-{item.id}</strong><div>{item.course_title}</div><small>{item.selected_slot || 'Saat yok'}</small></td><td>{item.student_name}<br />→ {item.teacher_name}</td><td>{(item.amount_cents / 100).toFixed(2)} TL</td><td>{item.commission_cents ? `${(item.commission_cents / 100).toFixed(2)} TL (%${item.commission_rate})` : 'Onay bekliyor'}</td><td>{item.teacher_payout_cents ? `${(item.teacher_payout_cents / 100).toFixed(2)} TL` : 'Onay bekliyor'}</td><td>{item.payment_status}<br />{statusLabel(item.status)}</td><td><div className="row-actions">{item.payment_status !== 'confirmed' && <button className="btn small" type="button" onClick={() => action(item.id, 'confirm', { commissionRate: Number(rates[item.teacher_id] ?? 15) })}>Para geldi</button>}{item.status === 'accepted' && item.payment_status !== 'payout_sent' && <button className="btn small secondary" type="button" onClick={() => action(item.id, 'payout-sent')}>Payı gönderdim</button>}</div></td></tr>)}</tbody></table></div></div>;
+  return <div className="card"><div className="section-row"><div><h2>Komisyon ve ödemeler</h2><p className="muted">Excel görünümünde takip et. Varsayılan öğretmen komisyonu %15'tir.</p></div><button className="btn small secondary" type="button" onClick={exportCsv}>Excel olarak indir</button></div><form onSubmit={saveIban}><label>Öğrencilerin ödeme yapacağı admin IBAN</label><input value={iban} onChange={(e) => setIban(e.target.value)} placeholder="TR ile başlayan 26 karakter" required /><label>Öğrenciye gösterilecek ödeme açıklaması</label><textarea value={instruction} onChange={(e) => setInstruction(e.target.value)} maxLength={500} rows="3" required /><p className="muted">Her işlem için öğrenciye ayrıca otomatik referans numarası gösterilir.</p><button className="btn small" type="submit">Ödeme ayarlarını kaydet</button></form><form onSubmit={saveSiteContact} style={{ marginTop: 18 }}><label>WhatsApp iletişim etiketi</label><input value={whatsappLabel} onChange={(e) => setWhatsappLabel(e.target.value)} placeholder="WhatsApp üzerinden bize yazın" required /><label>WhatsApp telefon numarası</label><input value={whatsappNumber} onChange={(e) => setWhatsappNumber(e.target.value)} placeholder="905xxxxxxxxx veya +90..." /><p className="muted">Bu değer ana sayfadaki iletişim kartında görünür.</p><button className="btn small secondary" type="submit">İletişim hattını kaydet</button></form>{message && <div className="success-box">{message}</div>}{error && <div className="error-box">{error}</div>}<h3 className="payment-section-title">Öğretmen komisyon oranları</h3><div className="table-scroll"><table><thead><tr><th>Öğretmen</th><th>Komisyon %</th><th>İşlem</th></tr></thead><tbody>{teachers.map((teacher) => <tr key={teacher.teacher_id}><td>{teacher.full_name}<div className="muted">{teacher.email}</div></td><td><input className="rate-input" type="number" min="0" max="100" step="0.01" value={rates[teacher.teacher_id] ?? 15} onChange={(event) => setRates({ ...rates, [teacher.teacher_id]: event.target.value })} /></td><td><button className="btn small secondary" type="button" onClick={() => saveRate(teacher.teacher_id)}>Kaydet</button></td></tr>)}</tbody></table></div><h3 className="payment-section-title">Ödeme kayıtları</h3><div className="table-scroll"><table><thead><tr><th>Başvuru / Ders</th><th>Taraflar</th><th>Toplam</th><th>Komisyon</th><th>Öğretmen Payı</th><th>Durum</th><th>İşlem</th></tr></thead><tbody>{payments.map((item) => <tr key={item.id}><td><strong>DERS-{item.id}</strong><div>{item.course_title}</div><small>{item.selected_slot || 'Saat yok'}</small></td><td>{item.student_name}<br />→ {item.teacher_name}</td><td>{(item.amount_cents / 100).toFixed(2)} TL</td><td>{item.commission_cents ? `${(item.commission_cents / 100).toFixed(2)} TL (%${item.commission_rate})` : 'Onay bekliyor'}</td><td>{item.teacher_payout_cents ? `${(item.teacher_payout_cents / 100).toFixed(2)} TL` : 'Onay bekliyor'}</td><td>{item.payment_status}<br />{statusLabel(item.status)}</td><td><div className="row-actions">{item.payment_status !== 'confirmed' && <button className="btn small" type="button" onClick={() => action(item.id, 'confirm', { commissionRate: Number(rates[item.teacher_id] ?? 15) })}>Para geldi</button>}{item.status === 'accepted' && item.payment_status !== 'payout_sent' && <button className="btn small secondary" type="button" onClick={() => action(item.id, 'payout-sent')}>Payı gönderdim</button>}</div></td></tr>)}</tbody></table></div></div>;
 }
 
 function AdminOverview({ token, onNavigate }) {
@@ -1168,18 +1223,20 @@ function ComplaintsPanel({ token }) {
 
 function LandingPage({ login }) {
   const [showAuth, setShowAuth] = useState(false);
-  const [siteSettings, setSiteSettings] = useState({ whatsappNumber: '', whatsappLabel: 'WhatsApp iletişim hattı' });
-  const [room, setRoom] = useState(() => localStorage.getItem('dersbul_room') || '');
+  const [siteSettings, setSiteSettings] = useState({
+    siteName: 'Ders Bul',
+    siteTagline: 'Özel ders merkezi',
+    heroTitle: 'Haftalık ders planını tek ekranda hazırla.',
+    heroSubtitle: 'Öğretmenler ders saatlerini kolayca seçer, haftalık program oluşturur ve ilanlarını net şekilde yayınlar.',
+    ctaText: 'Hemen başla',
+    whatsappNumber: '',
+    whatsappLabel: 'WhatsApp iletişim hattı',
+  });
+  const [openFaq, setOpenFaq] = useState(0);
 
   useEffect(() => {
     apiCall(null, 'GET', '/api/site-settings').then(setSiteSettings).catch(() => {});
   }, []);
-
-  const changeRoom = (event) => {
-    const nextRoom = event.target.value;
-    setRoom(nextRoom);
-    localStorage.setItem('dersbul_room', nextRoom);
-  };
 
   if (showAuth) {
     return (
@@ -1203,7 +1260,7 @@ function LandingPage({ login }) {
   return (
     <div className="landing-shell">
       <header className="landing-header">
-        <div className="brand">Ders <span>Bul</span></div>
+        <div className="brand">{siteSettings.siteName.split(' ').slice(0, -1).join(' ') || 'Ders'} <span>{siteSettings.siteName.split(' ').slice(-1)[0] || 'Bul'}</span></div>
         <nav className="landing-nav">
           <button className="btn small secondary" type="button" onClick={() => setShowAuth(true)}>Giriş Yap</button>
         </nav>
@@ -1212,13 +1269,19 @@ function LandingPage({ login }) {
       <main className="landing-main">
         <section className="hero-section simple">
           <div className="hero-copy">
-            <span className="eyebrow">Özel ders yönetimi</span>
-            <h1>Haftalık ders planını tek ekranda hazırla.</h1>
+            <span className="eyebrow">{siteSettings.siteTagline}</span>
+            <h1>{siteSettings.heroTitle}</h1>
             <p>
-              Öğretmenler ders saatlerini kolayca seçer, haftalık program oluşturur ve ilanlarını net şekilde yayınlar.
+              {siteSettings.heroSubtitle}
             </p>
             <div className="hero-actions">
-              <button className="btn" type="button" onClick={() => setShowAuth(true)}>Hemen başla</button>
+              <button className="btn" type="button" onClick={() => setShowAuth(true)}>{siteSettings.ctaText}</button>
+              <a className="btn ghost" href="#ozellikler">Nasıl çalışır?</a>
+            </div>
+            <div className="hero-proof" aria-label="Ders Bul avantajları">
+              <span><b>✓</b> Ücretsiz başlangıç</span>
+              <span><b>✓</b> Online ve yüz yüze</span>
+              <span><b>✓</b> Güvenli hesap</span>
             </div>
           </div>
 
@@ -1232,22 +1295,7 @@ function LandingPage({ login }) {
           </div>
         </section>
 
-        <section className="landing-tools" aria-label="Hızlı seçimler">
-          <div className="room-picker">
-            <div>
-              <span className="eyebrow">Ders odası</span>
-              <h2>Hangi odaya geçmek istersin?</h2>
-              <p className="muted">Şimdilik boş bırakabilirsin; seçtiğin oda bu cihazda hatırlanır.</p>
-            </div>
-            <select value={room} onChange={changeRoom} aria-label="Ders odası seç">
-              <option value="">Oda seçin</option>
-              <option value="matematik">Matematik odası</option>
-              <option value="fen">Fen ve bilim odası</option>
-              <option value="dil">Dil odası</option>
-              <option value="kodlama">Kodlama ve bilişim odası</option>
-              <option value="sanat">Sanat ve hobi odası</option>
-            </select>
-          </div>
+        <section className="landing-tools" aria-label="İletişim şekli">
           <div className="whatsapp-contact">
             <span className="whatsapp-icon">WA</span>
             <div><strong>{siteSettings.whatsappLabel}</strong><span>{siteSettings.whatsappNumber ? 'Soruların için doğrudan yazabilirsin.' : 'İletişim numarası yakında eklenecek.'}</span></div>
@@ -1275,7 +1323,50 @@ function LandingPage({ login }) {
             <div className="step-item"><strong>03</strong><h3>Harekete geç</h3><p>Ders ara ya da ilanını öğrencilerle buluştur.</p></div>
           </div>
         </section>
+
+        <section id="ozellikler" className="landing-metrics" aria-label="Ders Bul istatistikleri">
+          <div><strong>7/24</strong><span>Program erişimi</span></div>
+          <div><strong>2</strong><span>Rol: öğrenci ve öğretmen</span></div>
+          <div><strong>100%</strong><span>Kontrollü ders akışı</span></div>
+          <div><strong>1</strong><span>Tek sade panel</span></div>
+        </section>
+
+        <section className="content-section faq-section" aria-labelledby="faq-title">
+          <div className="section-head">
+            <span className="eyebrow">Merak edilenler</span>
+            <h2 id="faq-title">Başlamadan önce bilmen gerekenler.</h2>
+          </div>
+          <div className="faq-list">
+            {[
+              ['Ders Bul kimler için?', 'Öğrenciler uygun dersleri keşfedebilir, öğretmenler ise ilanlarını ve haftalık uygunluklarını tek panelden yönetebilir.'],
+              ['Öğretmen hesabı hemen aktif olur mu?', 'Öğretmen kayıtları güvenli bir başlangıç için onay sürecinden geçer. Profil bilgilerini tamamladıktan sonra ilanlarını yayınlayabilirsin.'],
+              ['Dersler online mı, yüz yüze mi?', 'İlan oluştururken online, yüz yüze veya iki seçeneği birlikte belirleyebilirsin.'],
+              ['Hesap oluşturmak ücretli mi?', 'Platforma kayıt olmak ücretsizdir. Ücret ve ders detayları ilgili ilan üzerinde açıkça gösterilir.'],
+            ].map(([question, answer], index) => (
+              <div className={`faq-item ${openFaq === index ? 'open' : ''}`} key={question}>
+                <button type="button" aria-expanded={openFaq === index} onClick={() => setOpenFaq(openFaq === index ? -1 : index)}>
+                  <span>{question}</span><b>{openFaq === index ? '−' : '+'}</b>
+                </button>
+                {openFaq === index && <p>{answer}</p>}
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section className="landing-cta">
+          <div>
+            <span className="eyebrow">Hazırsan başlayalım</span>
+            <h2>Daha düzenli bir ders deneyimi için ilk adımı at.</h2>
+            <p>İster ders ara ister bildiğini paylaş; Ders Bul akışını senin için sadeleştirir.</p>
+          </div>
+          <button className="btn light" type="button" onClick={() => setShowAuth(true)}>Ücretsiz hesap oluştur</button>
+        </section>
       </main>
+      <footer className="landing-footer">
+        <strong>Ders <span>Bul</span></strong>
+        <span>Online ve yüz yüze özel ders platformu</span>
+        <small>© {new Date().getFullYear()} Ders Bul</small>
+      </footer>
     </div>
   );
 }
@@ -1501,12 +1592,13 @@ function TeacherScheduleBuilder({ token, userId }) {
 function App() {
   const { token, user, loading, login, logout } = useAuth();
 
-  if (loading) return <div className="container"><p className="muted">Yükleniyor...</p></div>;
-  if (!token || !user) return <LandingPage login={login} />;
+  if (loading) return <><ConnectionBanner /><LoadingState label="Ders Bul hazırlanıyor..." /></>;
+  if (window.location.pathname !== '/') return <><ConnectionBanner /><NotFoundPage /></>;
+  if (!token || !user) return <><ConnectionBanner /><LandingPage login={login} /></>;
 
   const isAdminLike = ['SUPER_ADMIN', 'ADMIN', 'ADMIN_HELPER'].includes(user.role);
 
-  return <DashboardShell user={user} token={token} onLogout={logout} />;
+  return <><ConnectionBanner /><DashboardShell user={user} token={token} onLogout={logout} /></>;
 }
 
 ReactDOM.createRoot(document.getElementById('root')).render(<App />);
